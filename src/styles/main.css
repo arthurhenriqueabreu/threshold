@@ -1,0 +1,548 @@
+:root {
+    --yellow: #d8c26a;
+    --yellow-dim: #8a7c4a;
+    --text: #e8e2ce;
+    --text-dim: #9a947f;
+    --bg: #0d0c08;
+    --panel: rgba(13, 12, 8, 0.92);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    font-family: 'Courier New', Courier, monospace;
+    color: var(--text);
+}
+
+#app,
+#app canvas {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* ---------- Screens ---------- */
+
+.screen {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1.2rem;
+    background: var(--panel);
+    z-index: 20;
+    text-align: center;
+}
+
+.overlay {
+    background: rgba(8, 7, 4, 0.75);
+    z-index: 30;
+}
+
+.title {
+    font-size: clamp(2.5rem, 8vw, 5rem);
+    font-weight: normal;
+    letter-spacing: 0.45em;
+    text-indent: 0.45em;
+    color: var(--yellow);
+}
+
+.subtitle {
+    letter-spacing: 0.35em;
+    text-indent: 0.35em;
+    color: var(--text-dim);
+    font-size: 0.85rem;
+}
+
+.menu-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    margin-top: 2rem;
+}
+
+.btn {
+    font-family: inherit;
+    font-size: 1rem;
+    letter-spacing: 0.25em;
+    text-indent: 0.25em;
+    padding: 0.75rem 3rem;
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--yellow-dim);
+    cursor: pointer;
+    transition: border-color 0.25s, color 0.25s, background 0.25s;
+}
+
+.btn:hover {
+    border-color: var(--yellow);
+    color: var(--yellow);
+    background: rgba(216, 194, 106, 0.06);
+}
+
+.btn--secondary {
+    border-color: #4a4636;
+    color: var(--text-dim);
+}
+
+.menu-footer {
+    position: absolute;
+    bottom: 1.5rem;
+    font-size: 0.72rem;
+    line-height: 1.6;
+    color: var(--text-dim);
+    letter-spacing: 0.1em;
+}
+
+/* ---------- Modais ---------- */
+
+.modal {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 40;
+}
+
+.modal-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.2rem;
+    padding: 2.5rem 3rem;
+    border: 1px solid var(--yellow-dim);
+    background: var(--panel);
+}
+
+.modal-title {
+    letter-spacing: 0.3em;
+    text-indent: 0.3em;
+    color: var(--yellow);
+    font-size: 0.95rem;
+}
+
+#player-name-input {
+    font-family: inherit;
+    font-size: 1.1rem;
+    text-align: center;
+    letter-spacing: 0.15em;
+    padding: 0.6rem;
+    width: 16rem;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--yellow-dim);
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.25s;
+}
+
+#player-name-input:focus {
+    border-bottom-color: var(--yellow);
+}
+
+.input-error {
+    border-bottom-color: #b04a3a !important;
+}
+
+/* ---------- Dificuldade ---------- */
+
+.difficulty-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+    width: 100%;
+    max-width: 22rem;
+}
+
+.diff-btn {
+    font-family: inherit;
+    font-size: 0.85rem;
+    letter-spacing: 0.15em;
+    padding: 1rem 1.5rem;
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--yellow-dim);
+    cursor: pointer;
+    transition: border-color 0.25s, color 0.25s, background 0.25s, transform 0.15s;
+    text-align: left;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.diff-btn:hover {
+    border-color: var(--yellow);
+    color: var(--yellow);
+    background: rgba(216, 194, 106, 0.06);
+    transform: translateX(4px);
+}
+
+.diff-btn.selected {
+    border-color: var(--yellow);
+    color: var(--yellow);
+    background: rgba(216, 194, 106, 0.12);
+    box-shadow: inset 4px 0 0 var(--yellow);
+}
+
+.diff-name {
+    font-size: 1rem;
+    font-weight: bold;
+    letter-spacing: 0.2em;
+}
+
+.diff-desc {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    letter-spacing: 0.1em;
+}
+
+/* ---------- Instruções ---------- */
+
+.controls-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    color: var(--text-dim);
+    font-size: 0.9rem;
+}
+
+.controls-list span {
+    display: inline-block;
+    min-width: 5.5rem;
+    color: var(--yellow);
+}
+
+/* ---------- Loading ---------- */
+
+.loading-text {
+    font-size: 1.6rem;
+    letter-spacing: 0.5em;
+    text-indent: 0.5em;
+    animation: pulse 1.6s ease-in-out infinite;
+}
+
+.loading-sub {
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    letter-spacing: 0.2em;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 0.35; }
+    50% { opacity: 1; }
+}
+
+/* ---------- HUD ---------- */
+
+#hud {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.hud-label {
+    font-size: 0.65rem;
+    letter-spacing: 0.3em;
+    color: var(--text-dim);
+    margin-bottom: 0.35rem;
+}
+
+#hud-objectives {
+    position: absolute;
+    top: 1.4rem;
+    left: 1.6rem;
+}
+
+.hud-goal {
+    font-size: 0.85rem;
+    color: var(--yellow);
+    margin-bottom: 0.6rem;
+}
+
+#objectives-list {
+    list-style: none;
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.objective--done {
+    color: var(--yellow);
+}
+
+#hud-score-box {
+    position: absolute;
+    top: 1.4rem;
+    right: 1.6rem;
+    text-align: right;
+}
+
+#hud-score {
+    font-size: 1.4rem;
+    color: var(--yellow);
+}
+
+#crosshair {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -52%);
+    color: rgba(232, 226, 206, 0.55);
+    font-size: 0.9rem;
+}
+
+#hud-prompt {
+    position: absolute;
+    top: 56%;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.85rem;
+    letter-spacing: 0.15em;
+    color: var(--text);
+    white-space: pre-line;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+#hud-prompt.visible {
+    opacity: 1;
+}
+
+#notifications {
+    position: absolute;
+    bottom: 18%;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.notification {
+    padding: 0.6rem 1.6rem;
+    border: 1px solid var(--yellow-dim);
+    background: rgba(13, 12, 8, 0.85);
+    color: var(--yellow);
+    font-size: 0.85rem;
+    letter-spacing: 0.2em;
+    white-space: pre-line;
+    text-align: center;
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.35s, transform 0.35s;
+}
+
+.notification--visible {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.notification--warning {
+    color: #c07a5a;
+    border-color: #7a4a38;
+}
+
+/* ---------- Legenda modo fácil ---------- */
+
+#hud-legend {
+    position: absolute;
+    left: 1.6rem;
+    bottom: 1.6rem;
+    max-width: 26rem;
+    padding: 0.9rem 1rem 0.8rem;
+    background: rgba(13, 12, 8, 0.88);
+    border: 1px solid var(--yellow-dim);
+    pointer-events: none;
+}
+
+#legend-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.32rem;
+    margin-top: 0.5rem;
+    counter-reset: legend;
+}
+
+.legend-step {
+    font-size: 0.74rem;
+    line-height: 1.35;
+    color: var(--text-dim);
+    letter-spacing: 0.06em;
+    display: flex;
+    gap: 0.55rem;
+    align-items: flex-start;
+    transition: color 0.25s, opacity 0.25s;
+}
+
+.legend-step::before {
+    counter-increment: legend;
+    content: counter(legend) ".";
+    color: var(--text-dim);
+    min-width: 1.1rem;
+    text-align: right;
+    font-size: 0.7rem;
+    margin-top: 0.05rem;
+}
+
+.legend-step--done {
+    color: var(--yellow);
+    opacity: 0.85;
+}
+
+.legend-step--done::before {
+    color: var(--yellow);
+    content: "✓";
+}
+
+.legend-step--active {
+    color: var(--text);
+    background: rgba(216, 194, 106, 0.08);
+    border-left: 2px solid var(--yellow);
+    padding: 0.25rem 0.4rem;
+    margin-left: -0.4rem;
+}
+
+.legend-step--active::before {
+    color: var(--yellow);
+}
+
+.hud-legend-hint {
+    margin-top: 0.6rem;
+    font-size: 0.62rem;
+    letter-spacing: 0.14em;
+    color: #88cc44;
+    opacity: 0.9;
+}
+
+/* ---------- Minimapa modo fácil ---------- */
+
+#hud-minimap {
+    position: absolute;
+    right: 1.6rem;
+    bottom: 1.6rem;
+    padding: 0.7rem 0.8rem 0.6rem;
+    background: rgba(13, 12, 8, 0.88);
+    border: 1px solid var(--yellow-dim);
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+
+#minimap-canvas {
+    display: block;
+    width: 168px;
+    height: 132px;
+    background: #0d0c08;
+    border: 1px solid #2a2820;
+    image-rendering: pixelated;
+}
+
+.minimap-legend {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.2rem 0.8rem;
+    font-size: 0.58rem;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+}
+
+.minimap-legend span {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    white-space: nowrap;
+}
+
+.dot {
+    width: 7px;
+    height: 7px;
+    border: 1px solid rgba(0, 0, 0, 0.5);
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.dot-player { background: #e8e2ce; border-radius: 50%; }
+.dot-fuse { background: #ffcc44; border-radius: 50%; }
+.dot-key { background: #44aaff; }
+.dot-panel { background: #ff8844; border-radius: 50%; }
+.dot-door { background: #8a7a3a; }
+.dot-portal { background: #aa66ff; border-radius: 50%; }
+
+/* ---------- Pause / End / Level intro ---------- */
+
+.pause-title,
+.end-title {
+    font-weight: normal;
+    letter-spacing: 0.4em;
+    text-indent: 0.4em;
+    color: var(--yellow);
+    font-size: 1.8rem;
+}
+
+.end-stats {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    color: var(--text-dim);
+    font-size: 0.95rem;
+    letter-spacing: 0.1em;
+}
+
+.end-stats span {
+    color: var(--text);
+}
+
+.level-intro-title {
+    font-weight: normal;
+    font-size: 3rem;
+    letter-spacing: 0.5em;
+    text-indent: 0.5em;
+    color: var(--yellow);
+}
+
+.level-intro-sub {
+    letter-spacing: 0.35em;
+    text-indent: 0.35em;
+    color: var(--text-dim);
+}
+
+/* ---------- Fade ---------- */
+
+#fade {
+    position: fixed;
+    inset: 0;
+    background: #000;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.9s ease;
+    z-index: 50;
+}
+
+#fade.visible {
+    opacity: 1;
+}
