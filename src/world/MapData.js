@@ -1,6 +1,6 @@
 export const MAP = [
     '###################',
-    '#S.......#........#',
+    '#S.......#..R....W#',
     '#.######.#.######.#',
     '#.#....#.#.#....#.#',
     '#.#.F..#...#.P..#.#',
@@ -12,7 +12,7 @@ export const MAP = [
     '#.##.#.#####.######',
     '#.#..#.....#.######',
     '#.#.#######..######',
-    '#.........#...D..O#',
+    '#C........#...D..O#',
     '###################'
 ];
 
@@ -22,3 +22,10 @@ export const POINT_LIGHT_CELLS = [
 ];
 
 export const FLICKER_INDICES = [2, 6];
+
+// Itens de suporte por dificuldade (células): fantasma se a dificuldade não usar
+export const SUPPORT_ITEM_CELLS = {
+    radar: { col: 12, row: 1 },
+    phone: { col: 1, row: 13 },
+    flashlight: { col: 17, row: 1 }
+};

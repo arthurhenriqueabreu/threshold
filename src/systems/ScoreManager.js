@@ -1,3 +1,5 @@
+import { CONFIG } from '../core/Config.js';
+
 export class ScoreManager {
     constructor(gameState) {
         this.gameState = gameState;
@@ -8,13 +10,7 @@ export class ScoreManager {
     }
 
     pointsFor(actionId) {
-        switch (actionId) {
-            case 'fuse': return 100;
-            case 'keycard': return 100;
-            case 'power': return 200;
-            case 'portal': return 100;
-            default: return 0;
-        }
+        return CONFIG.scoring[actionId] ?? 0;
     }
 
     getScore() {

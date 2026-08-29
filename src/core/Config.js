@@ -23,28 +23,102 @@ export const CONFIG = {
     },
 
     atmosphere: {
-        fogColor: 0x2d281a,
-        fogDensity: 0.025,
-        ambientIntensity: 0.7
+        fogColor: 0x3a3324,
+        fogDensity: 0.02,
+        ambientIntensity: 1.0
     },
 
     scoring: {
         fuse: 100,
         keycard: 100,
         power: 200,
-        portal: 100
+        portal: 100,
+        radar: 150,
+        phone: 150,
+        flashlight: 250,
+        part: 100,
+        partA: 100,
+        partB: 100,
+        fragment: 150,
+        generator: 200,
+        stabilize: 200,
+        escape: 250
+    },
+
+    entities: {
+        // raio (em células) de início da observação / perseguição por modo de inimigo
+        observeRangeEasy: 7,
+        observeRangeNormal: 9,
+        observeRangeHard: 11,
+        stalkRange: 5,
+        chaseRange: 3,
+        speed: {
+            walk: 2.2,
+            stalk: 3.0,
+            chase: 5.5
+        },
+        chaseCooldown: 4,
+        searchTime: 3.5,
+        disappearTime: 1.2,
+        stalkTime: 5,
+        modelHeight: 2.0
+    },
+
+    items: {
+        radar: { label: 'RADAR', color: 0x44ffaa },
+        phone: { label: 'CELULAR', color: 0x66ccff },
+        flashlight: { label: 'LANTERNA', color: 0xffdd66 }
     },
 
     interaction: {
         maxDistance: 2.5
     },
 
+    retro: {
+        enabled: true,
+        internalResolutionHeight: 240,
+        pixelatedUpscale: true,
+        textureResolution: 128,
+        nearestFiltering: true,
+        disableMipmaps: true,
+        flatShading: true,
+        vertexSnapping: true,
+        vertexSnapStrength: 0.7,
+        affineMapping: true,
+        affineStrength: 0.55,
+        dithering: true,
+        ditherStrength: 0.4,
+        colorQuantization: true,
+        colorBits: 6,
+        postGamma: 0.85,
+        fogNear: 12,
+        fogFar: 62,
+        portalPixelGrid: 96,
+        // Quando VR/WebXR for habilitado futuramente, este preset desativa/amacia
+        // os efeitos que podem causar desconforto. Não está ativo por enquanto.
+        vrSafe: {
+            vertexSnapping: false,
+            vertexSnapStrength: 0,
+            affineMapping: true,
+            affineStrength: 0.2,
+            dithering: true,
+            internalLowRes: false
+        }
+    },
+
     difficulty: {
         easy: {
             name: 'FÁCIL',
-            description: 'Sem ameaças, guia de localização ativo, interação mais generosa',
+            description: 'Minimapa, guia ativo, entidades apenas observam e desaparecem',
             hasGuide: true,
-            hasEntities: false,
+            hasMinimap: true,
+            hasEntities: true,
+            hasRadarRequirement: false,
+            hasPhoneRequirement: false,
+            hasFlashlightRequirement: false,
+            enemyMode: 'benign',        // IDLE_HIDDEN -> OBSERVING -> DISAPPEARING
+            darkness: 1.0,
+            entityCount: 1,
             interactionDistanceMult: 1.5,
             flickerIntensity: 0.5,
             ambientEventChance: 0.15,
@@ -52,9 +126,16 @@ export const CONFIG = {
         },
         normal: {
             name: 'NORMAL',
-            description: 'Experiência padrão, eventos atmosféricos ocasionais',
+            description: 'Precisa radar e celular; entidades observam, seguem e perseguem tarde',
             hasGuide: false,
-            hasEntities: false,
+            hasMinimap: false,
+            hasEntities: true,
+            hasRadarRequirement: true,
+            hasPhoneRequirement: true,
+            hasFlashlightRequirement: false,
+            enemyMode: 'timid',         // OBSERVING -> STALKING -> CHASING (tarde)
+            darkness: 1.0,
+            entityCount: 2,
             interactionDistanceMult: 1.0,
             flickerIntensity: 1.0,
             ambientEventChance: 0.35,
@@ -62,13 +143,26 @@ export const CONFIG = {
         },
         hard: {
             name: 'DIFÍCIL',
-            description: 'Eventos intensos, luzes instáveis, sensação constante de observação',
+            description: 'Sem radar/celular, mais escuro, exige lanterna; entidades agressivas',
             hasGuide: false,
+            hasMinimap: false,
             hasEntities: true,
+            hasRadarRequirement: false,
+            hasPhoneRequirement: false,
+            hasFlashlightRequirement: true,
+            enemyMode: 'aggressive',   // OBSERVING -> CHASING rápido
+            darkness: 0.6,
+            entityCount: 3,
             interactionDistanceMult: 0.8,
             flickerIntensity: 1.8,
             ambientEventChance: 0.65,
             guidePulseSpeed: 0
         }
+    },
+
+    levels: {
+        count: 3,
+        // Índice do padrão de dificuldade usado como chave (0=easy,1=normal,2=hard)
+        names: ['CHÃO 0', 'CHÃO 1', 'CHÃO 2']
     }
 };

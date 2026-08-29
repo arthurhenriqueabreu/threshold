@@ -1,20 +1,23 @@
 import * as THREE from 'three';
+import { CONFIG } from '../core/Config.js';
 
 const VERTEX_SHADER = `
 varying vec2 vUv;
-varying vec3 vNormal;
 void main() {
     vUv = uv;
-    vNormal = normal;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
 `;
 
+// Shader retro do portal: UV quantizado (grade ~96x96), ruído grosseiro com
+// poucas oitavas, palette limitada, banding e dithering ordenado. Anima em
+// passos discretos de tempo para lembrar hardware limitado.
 const FRAGMENT_SHADER = `
 uniform float uTime;
 uniform vec3 uColor;
 uniform float uIntensity;
 uniform float uNoiseScale;
+uniform float uGrid;
 varying vec2 vUv;
 varying vec3 vNormal;
 
@@ -25,37 +28,68 @@ float hash(vec2 p) {
 float noise(vec2 p) {
     vec2 i = floor(p);
     vec2 f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
-               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-float fbm(vec2 p) {
-    float value = 0.0;
-    float amplitude = 0.5;
-    for (int i = 0; i < 5; i++) {
-        value += amplitude * noise(p);
-        p *= 2.0;
-        amplitude *= 0.5;
-    }
-    return value;
+// Quantiza a UV em uma grade pixelada de uGrid células (sem depender da
+// resolução da tela — robusto em qualquer contexto).
+vec2 quantUV(vec2 uv) {
+    vec2 g = max(vec2(1.0), floor(uGrid));
+    return (floor(uv * g) / g);
+}
+
+// Dithering Bayer 4x4 simples, estável espacialmente (sem índice dinâmico de
+// array, para compatibilidade com GLSL ES 1.00 / WebGL1).
+float bayer(vec2 p) {
+    int idx = int(mod(p.x, 4.0)) + int(mod(p.y, 4.0)) * 4;
+    float t = 0.5;
+    if (idx == 0) t = 0.0;
+    else if (idx == 1) t = 8.0;
+    else if (idx == 2) t = 2.0;
+    else if (idx == 3) t = 10.0;
+    else if (idx == 4) t = 12.0;
+    else if (idx == 5) t = 4.0;
+    else if (idx == 6) t = 14.0;
+    else if (idx == 7) t = 6.0;
+    else if (idx == 8) t = 3.0;
+    else if (idx == 9) t = 11.0;
+    else if (idx == 10) t = 1.0;
+    else if (idx == 11) t = 9.0;
+    else if (idx == 12) t = 15.0;
+    else if (idx == 13) t = 7.0;
+    else if (idx == 14) t = 13.0;
+    else if (idx == 15) t = 5.0;
+    return t / 15.0;
 }
 
 void main() {
-    vec2 uv = vUv - 0.5;
+    // passo temporal discreto para a animação
+    float t = floor(uTime * 6.0) / 6.0;
+
+    vec2 uv = quantUV(vUv) - 0.5;
     float dist = length(uv);
     float angle = atan(uv.y, uv.x);
 
-    float n = fbm(vUv * uNoiseScale + uTime * 0.15);
-    float swirl = sin(angle * 3.0 - uTime * 1.2 + n * 2.0) * 0.5 + 0.5;
-    float ring = sin(dist * 28.0 - uTime * 4.0 + n) * 0.5 + 0.5;
-    float core = smoothstep(0.55, 0.02, dist);
-    float edge = smoothstep(0.5, 0.45, dist);
+    float n = noise(vUv * uNoiseScale + t * 0.12);
+    float swirl = sin(angle * 3.0 - t * 1.2 + n * 2.0) * 0.5 + 0.5;
+    float core = smoothstep(0.55, 0.05, dist);
+    float edge = smoothstep(0.5, 0.42, dist);
 
-    float alpha = (core * (0.65 + ring * 0.35) + swirl * 0.25) * uIntensity * (1.0 - edge * 0.8);
-    vec3 baseColor = uColor;
-    vec3 accentColor = mix(uColor, vec3(1.0, 0.9, 0.6), swirl * 0.5);
-    vec3 color = mix(baseColor, accentColor, core * swirl);
+    float alpha = (core * (0.6 + swirl * 0.35)) * uIntensity * (1.0 - edge * 0.8);
+    vec3 color = uColor;
+    color = mix(color, vec3(1.0, 0.9, 0.6), swirl * 0.5);
+
+    // banding: reduz profundidade de cor (aprox. 4 bits)
+    color = floor(color * 15.0) / 15.0;
+
+    // dithering ordenado sutil
+    float th = bayer(gl_FragCoord.xy);
+    color += (th - 0.5) * 0.05 * uIntensity;
 
     float vignette = 1.0 - dist * 1.2;
     gl_FragColor = vec4(color * vignette, clamp(alpha * vignette, 0.0, 1.0));
@@ -71,11 +105,12 @@ export class Portal {
         this.uniforms = {
             uTime: { value: 0 },
             uColor: { value: new THREE.Color(0x2a251a) },
-            uIntensity: { value: 0.08 },
-            uNoiseScale: { value: 4.0 }
+            uIntensity: { value: 0.35 },
+            uNoiseScale: { value: 4.0 },
+            uGrid: { value: CONFIG.retro.portalPixelGrid }
         };
 
-        const geometry = new THREE.CircleGeometry(1.4, 64);
+        const geometry = new THREE.CircleGeometry(1.4, 22);
         this.surface = new THREE.Mesh(geometry, new THREE.ShaderMaterial({
             vertexShader: VERTEX_SHADER,
             fragmentShader: FRAGMENT_SHADER,
@@ -87,23 +122,16 @@ export class Portal {
         this.surface.position.y = 1.6;
         this.surface.renderOrder = 1;
 
-        const frameGeometry = new THREE.TorusGeometry(1.45, 0.07, 12, 64);
-        this.frame = new THREE.Mesh(frameGeometry, new THREE.MeshStandardMaterial({
+        const frameGeometry = new THREE.TorusGeometry(1.45, 0.07, 6, 22);
+        this.frame = new THREE.Mesh(frameGeometry, new THREE.MeshLambertMaterial({
             color: 0x3a3528,
-            metalness: 0.6,
-            roughness: 0.4,
-            emissive: 0x1a1510,
-            emissiveIntensity: 0.3
+            emissive: 0x14100c
         }));
         this.frame.position.y = 1.6;
 
-        const innerFrameGeo = new THREE.TorusGeometry(1.3, 0.035, 8, 48);
-        const innerFrameMat = new THREE.MeshStandardMaterial({
-            color: 0xffb84d,
-            metalness: 0.8,
-            roughness: 0.2,
-            emissive: 0xcc8822,
-            emissiveIntensity: 0
+        const innerFrameGeo = new THREE.TorusGeometry(1.3, 0.035, 5, 16);
+        const innerFrameMat = new THREE.MeshBasicMaterial({
+            color: 0xffb84d
         });
         this.innerFrame = new THREE.Mesh(innerFrameGeo, innerFrameMat);
         this.innerFrame.position.y = 1.6;
@@ -120,7 +148,7 @@ export class Portal {
     }
 
     createParticles() {
-        const count = 150;
+        const count = 64;
         const geometry = new THREE.BufferGeometry();
         const positions = new Float32Array(count * 3);
         const sizes = new Float32Array(count);
@@ -132,7 +160,7 @@ export class Portal {
             positions[i * 3] = Math.cos(angle) * radius;
             positions[i * 3 + 1] = 0.5 + Math.random() * 2.2;
             positions[i * 3 + 2] = Math.sin(angle) * radius;
-            sizes[i] = 0.03 + Math.random() * 0.06;
+            sizes[i] = 0.05 + Math.random() * 0.05;
             alphas[i] = 0.3 + Math.random() * 0.7;
         }
 
@@ -142,16 +170,27 @@ export class Portal {
 
         const material = new THREE.PointsMaterial({
             color: 0xffcc66,
-            size: 0.06,
+            size: 0.05,
+            sizeAttenuation: true,
             transparent: true,
             opacity: 0.7,
             depthWrite: false,
-            blending: THREE.AdditiveBlending,
-            sizeAttenuation: true,
-            vertexColors: false
+            blending: THREE.AdditiveBlending
         });
 
         return new THREE.Points(geometry, material);
+    }
+
+    destroy() {
+        this.surface.geometry.dispose();
+        this.surface.material.dispose();
+        this.frame.geometry.dispose();
+        this.frame.material.dispose();
+        this.innerFrame.geometry.dispose();
+        this.innerFrame.material.dispose();
+        this.particles.geometry.dispose();
+        this.particles.material.dispose();
+        this.light.dispose();
     }
 
     unlock() {
@@ -186,19 +225,13 @@ export class Portal {
             const p = this.unlockProgress;
 
             this.uniforms.uColor.value.setHSL(0.12, 0.8, 0.25 + p * 0.35);
-            this.uniforms.uIntensity.value = 0.08 + p * 1.5;
+            this.uniforms.uIntensity.value = 0.35 + p * 1.4;
             this.uniforms.uNoiseScale.value = 4.0 + p * 6.0;
             this.light.intensity = p * 4.0;
             this.light.color.setHSL(0.12, 0.9, 0.4 + p * 0.3);
             this.light.decay = 1.5 - p * 0.5;
 
-            this.innerFrame.material.emissiveIntensity = p * 2.5;
-            this.innerFrame.material.emissive.setHSL(0.1, 0.9, 0.4);
-            this.innerFrame.rotation.z += delta * (0.3 + p * 2.0);
             this.innerFrame.scale.setScalar(1.0 + Math.sin(time * 3) * 0.02 * p);
-
-            this.frame.material.emissiveIntensity = p * 0.8;
-            this.frame.material.emissive.setHSL(0.1, 0.8, 0.2);
 
             this.particles.material.color.setHSL(0.1, 0.9, 0.6);
             this.particles.material.opacity = 0.4 + p * 0.6;

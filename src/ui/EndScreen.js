@@ -8,7 +8,21 @@ export class EndScreen {
         });
     }
 
-    showLevelIntro(duration = 2500) {
+    showLevelIntro(durationOrOptions, fallbackDuration = 2500) {
+        let duration = fallbackDuration;
+        let title = 'LEVEL 1';
+        let subtitle = 'COMING SOON';
+        if (typeof durationOrOptions === 'number') {
+            duration = durationOrOptions;
+        } else if (durationOrOptions && typeof durationOrOptions === 'object') {
+            if (durationOrOptions.title) title = durationOrOptions.title;
+            if (durationOrOptions.subtitle) subtitle = durationOrOptions.subtitle;
+            if (durationOrOptions.duration) duration = durationOrOptions.duration;
+        }
+        const titleEl = this.introScreen.querySelector('.level-intro-title') || this.introScreen.firstElementChild;
+        const subEl = this.introScreen.querySelector('.level-intro-sub');
+        if (titleEl) titleEl.textContent = title;
+        if (subEl) subEl.textContent = subtitle;
         this.introScreen.classList.remove('hidden');
         return new Promise((resolve) => {
             setTimeout(() => {

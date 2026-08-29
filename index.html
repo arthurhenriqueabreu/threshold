@@ -53,15 +53,15 @@
             <div class="difficulty-options">
               <button id="diff-easy" class="diff-btn" data-diff="easy">
                 <span class="diff-name">FÁCIL</span>
-                <span class="diff-desc">Sem ameaças, guia ativo</span>
+                <span class="diff-desc">Minimapa e guia; entidades só observam e desaparecem</span>
               </button>
               <button id="diff-normal" class="diff-btn" data-diff="normal">
                 <span class="diff-name">NORMAL</span>
-                <span class="diff-desc">Experiência padrão</span>
+                <span class="diff-desc">Exige achar radar e celular; entidades perseguem tarde</span>
               </button>
               <button id="diff-hard" class="diff-btn" data-diff="hard">
                 <span class="diff-name">DIFÍCIL</span>
-                <span class="diff-desc">Eventos intensos</span>
+                <span class="diff-desc">Sem radar/celular, mais escuro; exige lanterna; agressivas</span>
               </button>
             </div>
           </div>
@@ -76,6 +76,7 @@
               <li><span>MOUSE</span> olhar</li>
               <li><span>SHIFT</span> correr</li>
               <li><span>E</span> interagir</li>
+              <li><span>F</span> lanterna (dificuldade difícil)</li>
               <li><span>ESC</span> liberar cursor</li>
             </ul>
             <button id="btn-close-instructions" class="btn btn--secondary">VOLTAR</button>
@@ -85,6 +86,10 @@
 
       <!-- HUD -->
       <div id="hud" class="hidden">
+        <div id="hud-level" class="hidden">
+          <p class="hud-label">NÍVEL</p>
+          <p id="hud-level-name">CHÃO 0</p>
+        </div>
         <div id="hud-objectives">
           <p class="hud-label">OBJETIVO</p>
           <p class="hud-goal">Restaurar o dispositivo</p>
@@ -97,6 +102,17 @@
         <div id="crosshair">+</div>
         <div id="hud-prompt"></div>
         <div id="notifications"></div>
+
+        <div id="hud-items">
+          <span id="item-radar" class="hud-item hidden">RADAR</span>
+          <span id="item-phone" class="hud-item hidden">CELULAR</span>
+          <span id="item-flashlight" class="hud-item hidden">LANTERNA</span>
+        </div>
+        <div id="hud-phone" class="hidden">
+          <p class="hud-phone-label">— TRANSMISSÃO —</p>
+          <p id="hud-phone-text"></p>
+        </div>
+
         <div id="hud-legend" class="hidden">
           <p class="hud-label">GUIA — MODO FÁCIL</p>
           <ol id="legend-list"></ol>
@@ -141,6 +157,18 @@
           <p>Tempo: <span id="end-time"></span></p>
         </div>
         <button id="btn-restart" class="btn">JOGAR NOVAMENTE</button>
+      </div>
+
+      <!-- Tela de fim de jogo (captura) -->
+      <div id="game-over-screen" class="screen hidden">
+        <h2 class="end-title">VOCÊ FOI CAPTURADO</h2>
+        <p class="end-sub">A anomalia alcançou você.</p>
+        <div class="end-stats">
+          <p>Jogador: <span id="go-player"></span></p>
+          <p>Pontuação: <span id="go-score"></span></p>
+        </div>
+        <button id="btn-go-restart" class="btn">TENTAR NOVAMENTE</button>
+        <button id="btn-go-menu" class="btn btn--secondary">MENU</button>
       </div>
 
       <!-- Fade -->

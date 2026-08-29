@@ -11,7 +11,8 @@ import { PickupItem } from '../interactions/PickupItem.js';
 import { Door } from '../interactions/Door.js';
 import { FuseBox } from '../interactions/FuseBox.js';
 import { Portal } from '../interactions/Portal.js';
-import { MAP, POINT_LIGHT_CELLS, FLICKER_INDICES } from './MapData.js';
+import { MAP, POINT_LIGHT_CELLS, FLICKER_INDICES, SUPPORT_ITEM_CELLS } from './MapData.js';
+import { configureRetroMaterial } from '../rendering/RetroMaterial.js';
 
 const CORNER_NW = 'nw';
 const CORNER_NE = 'ne';
@@ -81,12 +82,20 @@ export class Level0 extends Level {
         const ceilingTexture = createCeilingTexture(this.cols / 2, this.rows / 2);
 
         const floorMaterial = new THREE.MeshLambertMaterial({ map: carpetTexture });
-        const floor = new THREE.Mesh(new THREE.PlaneGeometry(size, size), floorMaterial);
+        configureRetroMaterial(floorMaterial);
+        const floor = new THREE.Mesh(
+            new THREE.PlaneGeometry(size, size, this.cols, this.rows),
+            floorMaterial
+        );
         floor.rotation.x = -Math.PI / 2;
         this.group.add(floor);
 
         const ceilingMaterial = new THREE.MeshLambertMaterial({ map: ceilingTexture });
-        const ceiling = new THREE.Mesh(new THREE.PlaneGeometry(size, size), ceilingMaterial);
+        configureRetroMaterial(ceilingMaterial);
+        const ceiling = new THREE.Mesh(
+            new THREE.PlaneGeometry(size, size, this.cols, this.rows),
+            ceilingMaterial
+        );
         ceiling.rotation.x = Math.PI / 2;
         ceiling.position.y = CONFIG.game.wallHeight;
         this.group.add(ceiling);
@@ -106,6 +115,7 @@ export class Level0 extends Level {
             this.cellSize
         );
         const wallMaterial = new THREE.MeshLambertMaterial({ map: wallTexture });
+        configureRetroMaterial(wallMaterial);
         const walls = new THREE.InstancedMesh(wallGeometry, wallMaterial, wallCells.length);
         const matrix = new THREE.Matrix4();
         wallCells.forEach((cell, index) => {
@@ -121,21 +131,13 @@ export class Level0 extends Level {
 
     buildFixtures() {
         const fixtureGeometry = new THREE.BoxGeometry(1.4, 0.06, 0.5);
-        // Usa MeshStandard com emissive para nunca ficar preto puro, mesmo sem luz
-        // Dois materiais fixos (sem instanceColor) evita bug de vertexColors/instanceColor
-        const fixtureMaterialOn = new THREE.MeshStandardMaterial({
-            color: 0xfff2b0,
-            emissive: 0xfff2b0,
-            emissiveIntensity: 1.2,
-            roughness: 0.8,
-            metalness: 0
+        // Luminárias: materiais auto-iluminados (MeshBasic) — flat, sem PBR,
+        // sem glow HDR. O brilho vem da própria cor, não de emissive moderno.
+        const fixtureMaterialOn = new THREE.MeshBasicMaterial({
+            color: 0xfff2b0
         });
-        const fixtureMaterialOff = new THREE.MeshStandardMaterial({
-            color: 0xc9b896,
-            emissive: 0xc9b896,
-            emissiveIntensity: 0.45,
-            roughness: 0.9,
-            metalness: 0
+        const fixtureMaterialOff = new THREE.MeshBasicMaterial({
+            color: 0x8a7f5f
         });
         const fixturesOn = [];
         const fixturesOff = [];
@@ -197,6 +199,7 @@ export class Level0 extends Level {
             map: createWallTexture(1, 2),
             color: 0xbfb28a
         });
+        configureRetroMaterial(pillarMaterial);
 
         const pillars = new THREE.InstancedMesh(pillarGeometry, pillarMaterial, PILLAR_CORNERS.length);
         const matrix = new THREE.Matrix4();
@@ -223,6 +226,7 @@ export class Level0 extends Level {
     buildCrates() {
         const crateGeometry = new THREE.BoxGeometry(0.7, 0.7, 0.7);
         const crateMaterial = new THREE.MeshLambertMaterial({ color: 0x5a4f32 });
+        configureRetroMaterial(crateMaterial);
         const crates = new THREE.InstancedMesh(crateGeometry, crateMaterial, CRATE_PLACEMENTS.length);
         const matrix = new THREE.Matrix4();
         const half = this.cellSize / 2;
@@ -246,10 +250,8 @@ export class Level0 extends Level {
     }
 
     buildWallDetails() {
-        const detailMaterial = new THREE.MeshStandardMaterial({
-            color: 0x3a3528,
-            metalness: 0.3,
-            roughness: 0.8
+        const detailMaterial = new THREE.MeshLambertMaterial({
+            color: 0x3a3528
         });
 
         const outletGeometry = new THREE.BoxGeometry(0.15, 0.1, 0.08);
@@ -285,8 +287,9 @@ export class Level0 extends Level {
             this.group.add(outletsMesh);
         }
 
-        const pipeGeometry = new THREE.CylinderGeometry(0.04, 0.04, CONFIG.game.wallHeight - 0.2, 8);
-        const pipeMaterial = new THREE.MeshStandardMaterial({ color: 0x2a2822, metalness: 0.6, roughness: 0.4 });
+        const pipeGeometry = new THREE.CylinderGeometry(0.04, 0.04, CONFIG.game.wallHeight - 0.2, 6);
+        const pipeMaterial = new THREE.MeshLambertMaterial({ color: 0x2a2822 });
+        configureRetroMaterial(pipeMaterial);
         const pipes = [];
 
         for (let row = 1; row < this.rows - 1; row++) {
@@ -318,14 +321,13 @@ export class Level0 extends Level {
         const portalCell = this.findCell('O');
         const world = this.cellToWorld(portalCell.col, portalCell.row);
         const half = this.cellSize / 2;
-        const structureMaterial = new THREE.MeshStandardMaterial({
-            color: 0x2a2720,
-            metalness: 0.5,
-            roughness: 0.7
+        const structureMaterial = new THREE.MeshLambertMaterial({
+            color: 0x2a2720
         });
 
         const cableGeometry = new THREE.CylinderGeometry(0.035, 0.035, CONFIG.game.wallHeight - 0.3, 6);
-        const cableMaterial = new THREE.MeshStandardMaterial({ color: 0x1a1815, metalness: 0.7, roughness: 0.3 });
+        const cableMaterial = new THREE.MeshLambertMaterial({ color: 0x1a1815 });
+        configureRetroMaterial(cableMaterial);
         for (const offset of [-1.3, -1.0, -0.6, 0.6, 1.0, 1.3]) {
             const cable = new THREE.Mesh(cableGeometry, cableMaterial);
             cable.position.set(world.x + half - 0.1, (CONFIG.game.wallHeight - 0.3) / 2, world.z + offset);
@@ -366,6 +368,7 @@ export class Level0 extends Level {
     }
 
     buildGameplay() {
+        this.pickups = [];
         const fuseCell = this.findCell('F');
         const fuseWorld = this.cellToWorld(fuseCell.col, fuseCell.row);
         const fuse = new PickupItem(this.createFuseMesh(), {
@@ -376,6 +379,7 @@ export class Level0 extends Level {
         fuse.baseY = 0.9;
         this.group.add(fuse.meshes[0]);
         this.addInteractable(fuse);
+        this.pickups.push({ item: fuse, id: 'fuse' });
 
         const cardCell = this.findCell('K');
         const cardWorld = this.cellToWorld(cardCell.col, cardCell.row);
@@ -387,32 +391,75 @@ export class Level0 extends Level {
         keycard.baseY = 0.9;
         this.group.add(keycard.meshes[0]);
         this.addInteractable(keycard);
+        this.pickups.push({ item: keycard, id: 'keycard' });
 
         this.fusePickup = fuse;
         this.keycardPickup = keycard;
 
+        this.buildSupportItems();
         this.buildFuseBox();
         this.buildDoor();
+    }
+
+    buildSupportItems() {
+        const items = [];
+        if (this.difficulty === 'normal') {
+            items.push(
+                { glyph: SUPPORT_ITEM_CELLS.radar, id: 'radar', prompt: '[E] Pegar radar', color: 0x44ffaa },
+                { glyph: SUPPORT_ITEM_CELLS.phone, id: 'phone', prompt: '[E] Pegar celular', color: 0x66ccff }
+            );
+        } else if (this.difficulty === 'hard') {
+            items.push(
+                { glyph: SUPPORT_ITEM_CELLS.flashlight, id: 'flashlight', prompt: '[E] Pegar lanterna', color: 0xffdd66 }
+            );
+        }
+
+        for (const { glyph, id, prompt, color } of items) {
+            const world = this.cellToWorld(glyph.col, glyph.row);
+            const item = new PickupItem(this.createSupportItemMesh(id, color), { id, prompt });
+            item.meshes[0].position.set(world.x, 0.9, world.z);
+            item.baseY = 0.9;
+            this.group.add(item.meshes[0]);
+            this.addInteractable(item);
+            this.pickups.push({ item, id });
+        }
+    }
+
+    createSupportItemMesh(id, color) {
+        const group = new THREE.Group();
+        const mat = new THREE.MeshLambertMaterial({ color, emissive: color });
+        configureRetroMaterial(mat);
+        const core = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.1, 0.2), mat);
+        if (id === 'radar') {
+            core.rotation.x = Math.PI / 2;
+        } else if (id === 'phone') {
+            core.rotation.y = Math.PI / 2;
+        }
+        const haloMat = new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.3,
+            side: THREE.DoubleSide
+        });
+        const halo = new THREE.Mesh(new THREE.OctahedronGeometry(0.34), haloMat);
+        group.add(core, halo);
+        return group;
     }
 
     createFuseMesh() {
         const group = new THREE.Group();
 
-        const bodyGeo = new THREE.CylinderGeometry(0.075, 0.075, 0.26, 16);
-        const bodyMat = new THREE.MeshStandardMaterial({
-            color: 0xeeeeee,
-            metalness: 0.4,
-            roughness: 0.3,
-            emissive: 0x442200,
-            emissiveIntensity: 0.4
+        const bodyGeo = new THREE.CylinderGeometry(0.075, 0.075, 0.26, 10);
+        const bodyMat = new THREE.MeshLambertMaterial({
+            color: 0xdedede,
+            emissive: 0x332200
         });
+        configureRetroMaterial(bodyMat);
         const body = new THREE.Mesh(bodyGeo, bodyMat);
 
-        const capGeo = new THREE.CylinderGeometry(0.075, 0.075, 0.03, 16);
-        const capMat = new THREE.MeshStandardMaterial({
-            color: 0x2a2a2a,
-            metalness: 0.9,
-            roughness: 0.1
+        const capGeo = new THREE.CylinderGeometry(0.075, 0.075, 0.03, 10);
+        const capMat = new THREE.MeshBasicMaterial({
+            color: 0x2a2a2a
         });
         const capTop = new THREE.Mesh(capGeo, capMat);
         capTop.position.y = 0.135;
@@ -420,20 +467,17 @@ export class Level0 extends Level {
         capBottom.position.y = -0.135;
         capBottom.rotation.x = Math.PI;
 
-        const glassGeo = new THREE.CylinderGeometry(0.045, 0.045, 0.20, 12, 1, true);
-        const glassMat = new THREE.MeshStandardMaterial({
+        const glassGeo = new THREE.CylinderGeometry(0.045, 0.045, 0.20, 8, 1, true);
+        const glassMat = new THREE.MeshLambertMaterial({
             color: 0xffeedd,
-            metalness: 0,
-            roughness: 0.2,
             transparent: true,
-            opacity: 0.85,
-            emissive: 0x664422,
-            emissiveIntensity: 0.35,
+            opacity: 0.8,
+            emissive: 0x553322,
             side: THREE.DoubleSide
         });
         const glass = new THREE.Mesh(glassGeo, glassMat);
 
-        const filamentGeo = new THREE.CylinderGeometry(0.012, 0.012, 0.18, 6);
+        const filamentGeo = new THREE.CylinderGeometry(0.012, 0.012, 0.18, 5);
         const filamentMat = new THREE.MeshBasicMaterial({
             color: 0xffee88,
             transparent: true,
@@ -452,29 +496,23 @@ export class Level0 extends Level {
         const group = new THREE.Group();
 
         const cardGeo = new THREE.BoxGeometry(0.28, 0.035, 0.42);
-        const cardMat = new THREE.MeshStandardMaterial({
+        const cardMat = new THREE.MeshLambertMaterial({
             color: 0xffd23a,
-            metalness: 0.1,
-            roughness: 0.3,
-            emissive: 0x664400,
-            emissiveIntensity: 0.45
+            emissive: 0x553300
         });
+        configureRetroMaterial(cardMat);
         const card = new THREE.Mesh(cardGeo, cardMat);
 
         const chipGeo = new THREE.BoxGeometry(0.035, 0.01, 0.035);
-        const chipMat = new THREE.MeshStandardMaterial({
-            color: 0x886622,
-            metalness: 0.9,
-            roughness: 0.1
+        const chipMat = new THREE.MeshBasicMaterial({
+            color: 0x886622
         });
         const chip = new THREE.Mesh(chipGeo, chipMat);
         chip.position.set(-0.07, 0.018, 0.1);
 
         const stripGeo = new THREE.BoxGeometry(0.18, 0.008, 0.025);
-        const stripMat = new THREE.MeshStandardMaterial({
-            color: 0x1a1a1a,
-            metalness: 0.1,
-            roughness: 0.9
+        const stripMat = new THREE.MeshBasicMaterial({
+            color: 0x1a1a1a
         });
         const strip = new THREE.Mesh(stripGeo, stripMat);
         strip.position.set(0, 0.017, -0.12);
@@ -489,54 +527,50 @@ export class Level0 extends Level {
         const half = this.cellSize / 2;
         const wallZ = world.z - 1.5 * this.cellSize + 0.12;
 
-        const indicatorMaterial = new THREE.MeshStandardMaterial({
+        const indicatorMaterial = new THREE.MeshLambertMaterial({
             color: 0x881111,
-            emissive: 0x550000,
-            emissiveIntensity: 0.8
+            emissive: 0x550000
         });
+        configureRetroMaterial(indicatorMaterial);
 
         const boxGroup = new THREE.Group();
 
         const boxGeo = new THREE.BoxGeometry(1.3, 1.7, 0.28);
-        const boxMat = new THREE.MeshStandardMaterial({
-            color: 0x4a4638,
-            metalness: 0.3,
-            roughness: 0.7
+        const boxMat = new THREE.MeshLambertMaterial({
+            color: 0x4a4638
         });
+        configureRetroMaterial(boxMat);
         const box = new THREE.Mesh(boxGeo, boxMat);
         box.position.set(world.x, 1.45, wallZ);
 
         const coverGeo = new THREE.BoxGeometry(1.35, 0.9, 0.12);
-        const coverMat = new THREE.MeshStandardMaterial({
-            color: 0x5a5545,
-            metalness: 0.4,
-            roughness: 0.6
+        const coverMat = new THREE.MeshLambertMaterial({
+            color: 0x5a5545
         });
+        configureRetroMaterial(coverMat);
         const cover = new THREE.Mesh(coverGeo, coverMat);
         cover.position.set(world.x, 0.85, wallZ - 0.15);
 
         const indicator = new THREE.Mesh(
-            new THREE.SphereGeometry(0.055, 12, 12),
+            new THREE.SphereGeometry(0.055, 8, 6),
             indicatorMaterial
         );
         indicator.position.set(world.x + 0.45, 1.95, wallZ - 0.18);
 
-        const fuseSlotGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.05, 16);
-        const fuseSlotMat = new THREE.MeshStandardMaterial({
-            color: 0x1a1812,
-            metalness: 0.2,
-            roughness: 0.8
+        const fuseSlotGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.05, 10);
+        const fuseSlotMat = new THREE.MeshLambertMaterial({
+            color: 0x1a1812
         });
+        configureRetroMaterial(fuseSlotMat);
         const fuseSlot = new THREE.Mesh(fuseSlotGeo, fuseSlotMat);
         fuseSlot.position.set(world.x - 0.35, 1.2, wallZ - 0.17);
         fuseSlot.rotation.x = -Math.PI / 2;
 
         const switchGeo = new THREE.BoxGeometry(0.06, 0.12, 0.04);
-        const switchMat = new THREE.MeshStandardMaterial({
-            color: 0xcc3322,
-            metalness: 0.5,
-            roughness: 0.4
+        const switchMat = new THREE.MeshLambertMaterial({
+            color: 0xcc3322
         });
+        configureRetroMaterial(switchMat);
         const switchMesh = new THREE.Mesh(switchGeo, switchMat);
         switchMesh.position.set(world.x + 0.45, 0.95, wallZ - 0.17);
         switchMesh.userData.isSwitch = true;
@@ -566,50 +600,42 @@ export class Level0 extends Level {
         const doorGroup = new THREE.Group();
 
         const panelGeo = new THREE.BoxGeometry(0.12, 2.65, this.cellSize * 0.95);
-        const panelMat = new THREE.MeshStandardMaterial({
-            color: 0x5a5245,
-            metalness: 0.4,
-            roughness: 0.6
+        const panelMat = new THREE.MeshLambertMaterial({
+            color: 0x5a5245
         });
+        configureRetroMaterial(panelMat);
         const panel = new THREE.Mesh(panelGeo, panelMat);
         panel.position.set(0, 1.325, -half + half * 0.025);
 
         const frameGeo = new THREE.BoxGeometry(0.18, 2.8, this.cellSize + 0.1);
-        const frameMat = new THREE.MeshStandardMaterial({
-            color: 0x3a3528,
-            metalness: 0.3,
-            roughness: 0.7
+        const frameMat = new THREE.MeshLambertMaterial({
+            color: 0x3a3528
         });
+        configureRetroMaterial(frameMat);
         const frame = new THREE.Mesh(frameGeo, frameMat);
         frame.position.set(0, 1.4, -half);
 
-        const handleGeo = new THREE.CylinderGeometry(0.018, 0.018, 0.18, 8);
-        const handleMat = new THREE.MeshStandardMaterial({
-            color: 0x8a7a5a,
-            metalness: 0.8,
-            roughness: 0.2
+        const handleGeo = new THREE.CylinderGeometry(0.018, 0.018, 0.18, 6);
+        const handleMat = new THREE.MeshBasicMaterial({
+            color: 0x8a7a5a
         });
         const handle = new THREE.Mesh(handleGeo, handleMat);
         handle.position.set(-0.09, 1.1, -half + 0.5);
         handle.rotation.z = Math.PI / 2;
 
         const lockGeo = new THREE.BoxGeometry(0.05, 0.07, 0.04);
-        const lockMat = new THREE.MeshStandardMaterial({
-            color: 0x2a2520,
-            metalness: 0.6,
-            roughness: 0.4
+        const lockMat = new THREE.MeshBasicMaterial({
+            color: 0x2a2520
         });
         const lock = new THREE.Mesh(lockGeo, lockMat);
         lock.position.set(-0.085, 1.25, -half + 0.3);
 
         const readerGeo = new THREE.BoxGeometry(0.08, 0.1, 0.03);
-        const readerMat = new THREE.MeshStandardMaterial({
+        const readerMat = new THREE.MeshLambertMaterial({
             color: 0x1a1815,
-            metalness: 0.2,
-            roughness: 0.8,
-            emissive: 0x880000,
-            emissiveIntensity: 0.5
+            emissive: 0x880000
         });
+        configureRetroMaterial(readerMat);
         const reader = new THREE.Mesh(readerGeo, readerMat);
         reader.position.set(-0.085, 1.25, -half + 0.12);
         reader.userData.isReader = true;

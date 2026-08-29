@@ -4,14 +4,17 @@ import { eventBus } from '../core/EventBus.js';
 export class ObjectiveManager {
     constructor(gameState) {
         this.gameState = gameState;
-        this.objectives = [
-            { id: 'fuse', title: 'Encontrar fusível', completed: false },
-            { id: 'keycard', title: 'Encontrar cartão', completed: false },
-            { id: 'power', title: 'Restaurar energia', completed: false }
-        ];
+        this.objectives = [];
         this.completedCount = 0;
 
         eventBus.on('objective:completed', (id) => this.markCompleted(id));
+    }
+
+    setObjectives(list) {
+        this.objectives = list.map((o) => ({ ...o, completed: false }));
+        this.completedCount = 0;
+        this.gameState.setLevelObjectives(this.objectives.map((o) => o.id));
+        eventBus.emit('hud:updateObjectives', this.objectives);
     }
 
     markCompleted(id) {

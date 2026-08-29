@@ -7,13 +7,26 @@ export class HUD {
         this.scoreElement = document.getElementById('hud-score');
         this.promptElement = document.getElementById('hud-prompt');
 
+        this.levelElement = document.getElementById('hud-level');
+        this.levelName = document.getElementById('hud-level-name');
+
+        this.radarItem = document.getElementById('item-radar');
+        this.phoneItem = document.getElementById('item-phone');
+        this.flashlightItem = document.getElementById('item-flashlight');
+        this.phonePanel = document.getElementById('hud-phone');
+        this.phoneText = document.getElementById('hud-phone-text');
+        this.phoneTimer = null;
+
         this.objectiveList = document.getElementById('objectives-list');
+        this.goalElement = document.querySelector('#hud-objectives .hud-goal');
         this.legendElement = document.getElementById('hud-legend');
         this.legendList = document.getElementById('legend-list');
         this.minimapElement = document.getElementById('hud-minimap');
         this.minimapCanvas = document.getElementById('minimap-canvas');
         this.minimap = this.minimapCanvas ? new Minimap(this.minimapCanvas) : null;
         this.difficulty = null;
+        this.radarEnabled = false;
+        this.phoneEnabled = false;
         this.lastObjectives = [
             { id: 'fuse', title: 'Encontrar fusível', completed: false },
             { id: 'keycard', title: 'Encontrar cartão', completed: false },
@@ -66,6 +79,10 @@ export class HUD {
             item.textContent = `${objective.completed ? '[x]' : '[ ]'} ${objective.title}`;
             this.objectiveList.appendChild(item);
         }
+        const active = objectives.find((o) => !o.completed);
+        if (this.goalElement) {
+            this.goalElement.textContent = active ? active.title : 'TUDO CONCLUÍDO';
+        }
     }
 
     setScore(score) {
@@ -88,7 +105,7 @@ export class HUD {
 
     show() {
         this.root.classList.remove('hidden');
-        this.updateEasyVisibility();
+        this.updateVisibility();
     }
 
     hide() {
@@ -101,6 +118,13 @@ export class HUD {
         this._doorOpened = false;
         this._lastPlayerPos = null;
         this._lastYaw = 0;
+        this.radarEnabled = false;
+        this.phoneEnabled = false;
+        this.setRadarEnabled(false);
+        this.setPhoneEnabled(false);
+        this.setItemOn('flashlight', false);
+        this.hidePhoneText();
+        this.setLevelName('');
         this.lastObjectives = [
             { id: 'fuse', title: 'Encontrar fusível', completed: false },
             { id: 'keycard', title: 'Encontrar cartão', completed: false },
@@ -113,28 +137,85 @@ export class HUD {
 
     setDifficulty(difficulty) {
         this.difficulty = difficulty;
-        this.updateEasyVisibility();
+        if (difficulty === 'easy') {
+            this.radarEnabled = true;
+        }
+        this.updateVisibility();
         this.renderLegend();
     }
 
-    updateLegendVisibility() {
-        // compat: alias para updateEasyVisibility
-        this.updateEasyVisibility();
+    setLevelName(name) {
+        if (this.levelName) {
+            this.levelName.textContent = name;
+        }
+        if (this.levelElement) {
+            if (name) this.levelElement.classList.remove('hidden');
+            else this.levelElement.classList.add('hidden');
+        }
     }
 
-    updateEasyVisibility() {
-        const isEasy = this.difficulty === 'easy';
+    setRadarEnabled(enabled) {
+        this.radarEnabled = enabled;
+        this.updateVisibility();
+        if (this.minimap) {
+            this.minimap.setVisible(enabled);
+            if (enabled && this._lastPlayerPos) {
+                this.minimap.update(this._lastPlayerPos, this._lastYaw);
+            }
+        }
+    }
+
+    setPhoneEnabled(enabled) {
+        this.phoneEnabled = enabled;
+        if (this.phoneItem) {
+            if (enabled) this.phoneItem.classList.remove('hidden');
+            else this.phoneItem.classList.add('hidden');
+        }
+    }
+
+    setItemOn(name, on) {
+        const el = name === 'flashlight' ? this.flashlightItem
+            : name === 'radar' ? this.radarItem
+            : name === 'phone' ? this.phoneItem : null;
+        if (!el) return;
+        if (name === 'flashlight') {
+            // chip aparece assim que o jogador possui a lanterna; "on" destaca quando acesa
+            el.classList.remove('hidden');
+        }
+        if (on) el.classList.add('hud-item--on');
+        else el.classList.remove('hud-item--on');
+    }
+
+    showPhoneText(text, duration) {
+        if (!this.phonePanel || !this.phoneText || !this.phoneEnabled) return;
+        this.phoneText.textContent = text;
+        this.phonePanel.classList.remove('hidden');
+        if (this.phoneTimer) clearTimeout(this.phoneTimer);
+        this.phoneTimer = setTimeout(() => this.hidePhoneText(), duration ?? 3000);
+    }
+
+    hidePhoneText() {
+        if (this.phonePanel) this.phonePanel.classList.add('hidden');
+    }
+
+    updateLegendVisibility() {
+        // compat: alias para updateVisibility
+        this.updateVisibility();
+    }
+
+    updateVisibility() {
         const isPlaying = !this.root.classList.contains('hidden');
-        const show = isEasy && isPlaying;
+        const showGuide = this.difficulty === 'easy' && isPlaying;
         if (this.legendElement) {
-            if (show) this.legendElement.classList.remove('hidden');
+            if (showGuide) this.legendElement.classList.remove('hidden');
             else this.legendElement.classList.add('hidden');
         }
+        const showMap = this.radarEnabled && isPlaying;
         if (this.minimap) {
-            this.minimap.setVisible(show);
+            this.minimap.setVisible(showMap);
         }
         if (this.minimapElement) {
-            if (show) this.minimapElement.classList.remove('hidden');
+            if (showMap) this.minimapElement.classList.remove('hidden');
             else this.minimapElement.classList.add('hidden');
         }
     }
@@ -148,7 +229,7 @@ export class HUD {
     updateMinimap(playerPos, yaw) {
         this._lastPlayerPos = playerPos;
         this._lastYaw = yaw;
-        if (this.minimap && this.difficulty === 'easy') {
+        if (this.minimap && this.radarEnabled && this.difficulty) {
             this.minimap.update(playerPos, yaw);
         }
     }

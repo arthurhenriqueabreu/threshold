@@ -76,12 +76,14 @@ export class Lighting {
 
     setup(lightData, flickerIndices = [], flickerIntensity = 1.0) {
         const ambient = new THREE.AmbientLight(0xfff2cc, CONFIG.atmosphere.ambientIntensity);
-        const hemisphere = new THREE.HemisphereLight(0xfff4d6, 0x4a4228, 0.5);
+        const hemisphere = new THREE.HemisphereLight(0xfff4d6, 0x5a5238, 0.85);
         this.scene.add(ambient, hemisphere);
 
         lightData.forEach(({ col, row, position }, index) => {
-            // intensidade maior e distância maior para não deixar canto preto
-            const light = new THREE.PointLight(0xffe9b0, 1.6, 18, 1.5);
+            // Fluorescentes mais presentes: intensidade maior e falloff mais
+            // suave (decay menor) para iluminar o corredor e evitar "massa
+            // preta" nos cantos. Continua com alcance amplo.
+            const light = new THREE.PointLight(0xffe9b0, 3.2, 26, 1.2);
             light.position.set(position.x, CONFIG.game.wallHeight - 0.4, position.z);
             this.scene.add(light);
             this.pointLights.push(light);
@@ -107,7 +109,7 @@ export class Lighting {
 
     setPowerRestored(boost) {
         for (const light of this.pointLights) {
-            light.intensity = Math.min(light.intensity * boost, 2.5);
+            light.intensity = Math.min(light.intensity * boost, 5.0);
         }
         for (const flickering of this.flickeringLights) {
             flickering.baseIntensity *= boost;

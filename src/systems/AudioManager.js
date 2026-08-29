@@ -199,8 +199,25 @@ export class AudioManager {
             case 'power': this.sweep(60, 180, 0.8); break;
             case 'ui': this.blip(440, 0.08, 0.08); break;
             case 'distant': this.playRandomDistant(); break;
+            case 'whisper': this.whisperBlip(); break;
             default: break;
         }
+    }
+
+    whisperBlip() {
+        const ctx = this.context;
+        if (!ctx) return;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = 600 + Math.random() * 800;
+        osc.frequency.exponentialRampToValueAtTime(200 + Math.random() * 300, ctx.currentTime + 0.6);
+        gain.gain.setValueAtTime(0.04, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.7);
+        osc.connect(gain);
+        gain.connect(this.master);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.75);
     }
 
     playRandomDistant() {

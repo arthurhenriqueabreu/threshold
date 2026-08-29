@@ -546,3 +546,82 @@ body {
 #fade.visible {
     opacity: 1;
 }
+
+/* ---------- Nível atual / itens / celular ---------- */
+
+#hud-level {
+    position: absolute;
+    top: 1.4rem;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+}
+
+#hud-level-name {
+    font-size: 0.9rem;
+    letter-spacing: 0.3em;
+    color: var(--yellow);
+}
+
+#hud-items {
+    position: absolute;
+    bottom: 1.6rem;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 0.8rem;
+    align-items: center;
+}
+
+.hud-item {
+    font-size: 0.62rem;
+    letter-spacing: 0.2em;
+    color: var(--text);
+    padding: 0.3rem 0.7rem;
+    background: rgba(13, 12, 8, 0.85);
+    border: 1px solid var(--yellow-dim);
+}
+
+.hud-item--on {
+    color: var(--yellow);
+    border-color: var(--yellow);
+    box-shadow: 0 0 6px rgba(216, 194, 106, 0.5);
+}
+
+#hud-phone {
+    position: absolute;
+    left: 50%;
+    top: 22%;
+    transform: translateX(-50%);
+    text-align: center;
+    padding: 0.7rem 1.4rem;
+    background: rgba(13, 12, 8, 0.9);
+    border: 1px solid var(--yellow-dim);
+    max-width: 30rem;
+}
+
+.hud-phone-label {
+    font-size: 0.6rem;
+    letter-spacing: 0.3em;
+    color: var(--text-dim);
+    margin-bottom: 0.4rem;
+}
+
+#hud-phone-text {
+    font-size: 0.8rem;
+    letter-spacing: 0.08em;
+    color: #9fc8e8;
+    white-space: pre-line;
+}
+
+/* ---------- Game over ---------- */
+
+#game-over-screen .end-title {
+    color: #c05a3a;
+}
+
+.end-sub {
+    color: var(--text-dim);
+    letter-spacing: 0.2em;
+    font-size: 0.8rem;
+}

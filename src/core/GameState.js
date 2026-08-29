@@ -15,13 +15,18 @@ export class GameState {
         };
         this.inventory = {
             fuse: false,
-            keycard: false
+            keycard: false,
+            radar: false,
+            phone: false,
+            flashlight: false
         };
         this.scoredActions = new Set();
         this.portalUnlocked = false;
         this.gameCompleted = false;
         this.elapsedSeconds = 0;
         this.state = 'MENU';
+        this.currentLevelIndex = 0;
+        this.levelObjectiveIds = [];
     }
 
     setState(state) {
@@ -62,14 +67,29 @@ export class GameState {
         }
         this.objectives[id] = true;
         eventBus.emit('objective:completed', id);
-        if (this.allObjectivesComplete()) {
-            this.unlockPortal();
+        if (this.levelObjectiveIds.includes(id)) {
+            if (this.allObjectivesComplete()) {
+                this.unlockPortal();
+            }
         }
         return true;
     }
 
+    setLevelObjectives(ids) {
+        this.levelObjectiveIds = ids.slice();
+    }
+
     allObjectivesComplete() {
-        return Object.values(this.objectives).every(Boolean);
+        if (this.levelObjectiveIds.length === 0) {
+            return Object.values(this.objectives).every(Boolean);
+        }
+        return this.levelObjectiveIds.every((id) => this.objectives[id]);
+    }
+
+    advanceLevel() {
+        this.currentLevelIndex++;
+        this.portalUnlocked = false;
+        eventBus.emit('portal:locked');
     }
 
     unlockPortal() {
