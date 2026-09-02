@@ -34,4 +34,8 @@ export class Player {
     getPosition() {
         return this.movement.position;
     }
+
+    dispose() {
+        this.controller.dispose?.();
+    }
 }

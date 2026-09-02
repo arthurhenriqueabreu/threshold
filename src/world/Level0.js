@@ -13,6 +13,7 @@ import { FuseBox } from '../interactions/FuseBox.js';
 import { Portal } from '../interactions/Portal.js';
 import { MAP, POINT_LIGHT_CELLS, FLICKER_INDICES, SUPPORT_ITEM_CELLS } from './MapData.js';
 import { configureRetroMaterial } from '../rendering/RetroMaterial.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 
 const CORNER_NW = 'nw';
 const CORNER_NE = 'ne';
@@ -40,6 +41,7 @@ const CRATE_PLACEMENTS = [
 export class Level0 extends Level {
     constructor(scene, { gameState, events, difficulty }) {
         super(scene);
+        this.footstepSurface = 'carpet';
         this.gameState = gameState;
         this.events = events;
         this.difficulty = difficulty || 'normal';
@@ -410,7 +412,8 @@ export class Level0 extends Level {
             );
         } else if (this.difficulty === 'hard') {
             items.push(
-                { glyph: SUPPORT_ITEM_CELLS.flashlight, id: 'flashlight', prompt: '[E] Pegar lanterna', color: 0xffdd66 }
+                { glyph: SUPPORT_ITEM_CELLS.flashlight, id: 'flashlight', prompt: '[E] Pegar lanterna', color: 0xffdd66 },
+                { glyph: SUPPORT_ITEM_CELLS.phone, id: 'phone', prompt: '[E] Pegar celular', color: 0x66ccff }
             );
         }
 
@@ -427,19 +430,82 @@ export class Level0 extends Level {
 
     createSupportItemMesh(id, color) {
         const group = new THREE.Group();
+        // Celular Nokia 3310 PSX — modelo FBX real quando id === 'phone'
+        if (id === 'phone') {
+            const placeholderMat = new THREE.MeshLambertMaterial({ color, emissive: color });
+            configureRetroMaterial(placeholderMat);
+            const placeholder = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.08, 0.18), placeholderMat);
+            placeholder.name = 'phone_placeholder';
+            group.add(placeholder);
+
+            const haloMat = new THREE.MeshBasicMaterial({
+                color, transparent: true, opacity: 0.28,
+                side: THREE.DoubleSide, depthTest: true, depthWrite: false
+            });
+            const halo = new THREE.Mesh(new THREE.OctahedronGeometry(0.34), haloMat);
+            group.add(halo);
+
+            // Carrega FBX de forma assíncrona e substitui placeholder
+            const loader = new FBXLoader();
+            loader.load('/models/nokia/Nokia.fbx', (fbx) => {
+                // Remove placeholder
+                const ph = group.getObjectByName('phone_placeholder');
+                if (ph) {
+                    group.remove(ph);
+                    ph.geometry.dispose();
+                    ph.material.dispose();
+                }
+                // Textura difusa
+                const texLoader = new THREE.TextureLoader();
+                texLoader.load('/models/nokia/nokia-3310.jpg', (tex) => {
+                    tex.colorSpace = THREE.SRGBColorSpace;
+                    tex.magFilter = THREE.NearestFilter;
+                    tex.minFilter = THREE.NearestFilter;
+                    fbx.traverse((c) => {
+                        if (c.isMesh) {
+                            c.material.map = tex;
+                            c.material.needsUpdate = true;
+                            c.material.transparent = false;
+                            configureRetroMaterial(c.material);
+                        }
+                    });
+                }, undefined, () => {
+                    fbx.traverse((c) => { if (c.isMesh) configureRetroMaterial(c.material); });
+                });
+
+                // Normaliza: FBX Nokia vem em escala grande, centraliza e reduz
+                // Usa maior dimensão para não esticar; alvo ~0.22m (tamanho real celular)
+                const box = new THREE.Box3().setFromObject(fbx);
+                const size = new THREE.Vector3(); box.getSize(size);
+                const center = new THREE.Vector3(); box.getCenter(center);
+                const maxDim = Math.max(size.x, size.y, size.z);
+                const targetSize = 0.20;
+                const s = maxDim > 0.01 ? targetSize / maxDim : 0.008;
+                fbx.scale.setScalar(s);
+                // Corrige orientação: FBX Blender vem Z-up, precisa deitar com tela para cima
+                // Anterior -PI/2 + PI/2 deixava de ponta cabeça e grande; agora PI/2 simples
+                fbx.position.set(-center.x * s, -box.min.y * s + 0.015, -center.z * s);
+                fbx.rotation.set(Math.PI / 2, 0, 0);
+                // Se ficar invertido (tela para baixo), descomente a linha abaixo:
+                // fbx.rotation.y = Math.PI;
+                // Garante oclusão real
+                fbx.traverse((c) => {
+                    if (c.isMesh) { c.castShadow = false; c.receiveShadow = false; }
+                });
+                group.add(fbx);
+                group.userData.nokiaFbx = fbx;
+            }, undefined, () => {
+                // Falha: mantém placeholder
+                console.warn('[Level0] falha ao carregar Nokia.fbx');
+            });
+            return group;
+        }
         const mat = new THREE.MeshLambertMaterial({ color, emissive: color });
         configureRetroMaterial(mat);
         const core = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.1, 0.2), mat);
-        if (id === 'radar') {
-            core.rotation.x = Math.PI / 2;
-        } else if (id === 'phone') {
-            core.rotation.y = Math.PI / 2;
-        }
+        if (id === 'radar') core.rotation.x = Math.PI / 2;
         const haloMat = new THREE.MeshBasicMaterial({
-            color,
-            transparent: true,
-            opacity: 0.3,
-            side: THREE.DoubleSide
+            color, transparent: true, opacity: 0.3, side: THREE.DoubleSide, depthTest: true, depthWrite: false
         });
         const halo = new THREE.Mesh(new THREE.OctahedronGeometry(0.34), haloMat);
         group.add(core, halo);
@@ -529,54 +595,76 @@ export class Level0 extends Level {
 
         const indicatorMaterial = new THREE.MeshLambertMaterial({
             color: 0x881111,
-            emissive: 0x550000
+            emissive: 0x550000,
+            emissiveIntensity: 1.2
         });
         configureRetroMaterial(indicatorMaterial);
 
         const boxGroup = new THREE.Group();
+        boxGroup.userData.excludeFromDarkness = true;
 
         const boxGeo = new THREE.BoxGeometry(1.3, 1.7, 0.28);
         const boxMat = new THREE.MeshLambertMaterial({
-            color: 0x4a4638
+            color: 0x8a7f5e,
+            emissive: 0x1a1508,
+            emissiveIntensity: 0.55
         });
         configureRetroMaterial(boxMat);
         const box = new THREE.Mesh(boxGeo, boxMat);
         box.position.set(world.x, 1.45, wallZ);
+        box.userData.excludeFromDarkness = true;
 
         const coverGeo = new THREE.BoxGeometry(1.35, 0.9, 0.12);
         const coverMat = new THREE.MeshLambertMaterial({
-            color: 0x5a5545
+            color: 0x9a9178,
+            emissive: 0x1a1508,
+            emissiveIntensity: 0.25
         });
         configureRetroMaterial(coverMat);
         const cover = new THREE.Mesh(coverGeo, coverMat);
         cover.position.set(world.x, 0.85, wallZ - 0.15);
+        cover.userData.excludeFromDarkness = true;
 
         const indicator = new THREE.Mesh(
             new THREE.SphereGeometry(0.055, 8, 6),
             indicatorMaterial
         );
         indicator.position.set(world.x + 0.45, 1.95, wallZ - 0.18);
+        indicator.userData.excludeFromDarkness = true;
 
         const fuseSlotGeo = new THREE.CylinderGeometry(0.08, 0.08, 0.05, 10);
         const fuseSlotMat = new THREE.MeshLambertMaterial({
-            color: 0x1a1812
+            color: 0x3a3528,
+            emissive: 0x1a1508,
+            emissiveIntensity: 0.3
         });
         configureRetroMaterial(fuseSlotMat);
         const fuseSlot = new THREE.Mesh(fuseSlotGeo, fuseSlotMat);
         fuseSlot.position.set(world.x - 0.35, 1.2, wallZ - 0.17);
         fuseSlot.rotation.x = -Math.PI / 2;
+        fuseSlot.userData.excludeFromDarkness = true;
 
         const switchGeo = new THREE.BoxGeometry(0.06, 0.12, 0.04);
         const switchMat = new THREE.MeshLambertMaterial({
-            color: 0xcc3322
+            color: 0xdd4422,
+            emissive: 0x331100,
+            emissiveIntensity: 0.5
         });
         configureRetroMaterial(switchMat);
         const switchMesh = new THREE.Mesh(switchGeo, switchMat);
         switchMesh.position.set(world.x + 0.45, 0.95, wallZ - 0.17);
         switchMesh.userData.isSwitch = true;
+        switchMesh.userData.excludeFromDarkness = true;
 
         boxGroup.add(box, cover, indicator, fuseSlot, switchMesh);
         this.group.add(boxGroup);
+
+        // Luz dedicada ao quadro para não ficar preto no hard/fog denso
+        const panelLight = new THREE.PointLight(0xffe9b0, 1.9, 11, 1.4);
+        panelLight.position.set(world.x, 1.9, wallZ + 0.9);
+        panelLight.userData.excludeFromDarkness = true;
+        this.group.add(panelLight);
+        this._panelLight = panelLight;
 
         this.fuseBox = new FuseBox({
             mesh: boxGroup,
@@ -730,6 +818,7 @@ export class Level0 extends Level {
         if (!this.playerPosition) return;
         const playerCell = this.worldToCell(this.playerPosition.x, this.playerPosition.z);
         const radius = 3;
+        let didFlicker = false;
         for (let r = -radius; r <= radius; r++) {
             for (let c = -radius; c <= radius; c++) {
                 const col = playerCell.x + c;
@@ -738,9 +827,29 @@ export class Level0 extends Level {
                 if (this.grid[row][col] === '#') continue;
                 if (Math.random() < 0.3) {
                     this.lighting?.triggerFlickerAt(col, row);
+                    didFlicker = true;
                 }
             }
         }
+        if (didFlicker) this.events?.sfx('flicker');
+    }
+
+    playDistantSound() {
+        // 40% posicional distante real
+        if (Math.random() < 0.4 && this.events?.sfxPositional) {
+            // escolhe célula distante válida
+            const cols = this.cols, rows = this.rows;
+            for (let tries=0; tries<8; tries++) {
+                const c = Math.floor(Math.random()*cols);
+                const r = Math.floor(Math.random()*rows);
+                if (this.grid[r][c] === '#') continue;
+                const w = this.cellToWorld(c, r);
+                if (Math.hypot(w.x - this.playerPosition.x, w.z - this.playerPosition.z) < 9) continue;
+                this.events.sfxPositional('distant', w);
+                return;
+            }
+        }
+        this.events?.sfx('distant');
     }
 
     playDistantSound() {

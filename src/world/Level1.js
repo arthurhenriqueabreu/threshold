@@ -82,6 +82,7 @@ class Generator extends Interactable {
 export class Level1 extends Level {
     constructor(scene, { gameState, events, difficulty }) {
         super(scene);
+        this.footstepSurface = 'concrete';
         this.gameState = gameState;
         this.events = events;
         this.difficulty = difficulty || 'normal';

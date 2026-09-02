@@ -614,14 +614,340 @@ body {
     white-space: pre-line;
 }
 
-/* ---------- Game over ---------- */
+/* ---------- Ruído de proximidade ---------- */
+#proximity-static {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    pointer-events: none;
+    z-index: 11;
+    opacity: 0;
+    image-rendering: pixelated;
+    transition: opacity 0.15s linear;
+}
+
+ /* ---------- Game over — chuvisco Slenderman ---------- */
+
+#game-over-screen.game-over-static {
+    background: #000;
+    overflow: hidden;
+}
+
+#static-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    image-rendering: pixelated;
+    opacity: 0.92;
+    z-index: 0;
+}
+
+.static-vignette {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at center, transparent 42%, rgba(0,0,0,0.85) 100%);
+    z-index: 1;
+    pointer-events: none;
+}
+
+.static-scanlines {
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+        0deg,
+        rgba(0,0,0,0.18) 0px,
+        rgba(0,0,0,0.18) 2px,
+        transparent 2px,
+        transparent 4px
+    );
+    z-index: 1;
+    pointer-events: none;
+    opacity: 0.65;
+}
+
+.game-over-content {
+    position: relative;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1.2rem;
+    padding: 1.8rem 2.4rem;
+    background: rgba(13,12,8,0.86);
+    border: 1px solid var(--yellow-dim);
+    box-shadow: 0 0 24px rgba(0,0,0,0.85), 0 0 0 1px rgba(0,0,0,0.6) inset;
+    text-shadow: 0 1px 0 #000, 0 0 12px rgba(0,0,0,0.9);
+    animation: staticFlicker 0.18s steps(2) infinite;
+}
 
 #game-over-screen .end-title {
-    color: #c05a3a;
+    color: #ffd23a;
+    text-shadow: 0 1px 0 #000, 0 0 10px rgba(0,0,0,0.8);
+}
+
+#game-over-screen .end-title.glitch {
+    position: relative;
+    animation: glitchSkew 0.35s steps(2) infinite;
+}
+
+#game-over-screen .end-title.glitch::before,
+#game-over-screen .end-title.glitch::after {
+    content: attr(data-text);
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+#game-over-screen .end-title.glitch::before {
+    color: #00ffff;
+    transform: translateX(-1.5px);
+    opacity: 0.35;
+    mix-blend-mode: screen;
+    clip-path: inset(20% 0 45% 0);
+}
+#game-over-screen .end-title.glitch::after {
+    color: #ff0040;
+    transform: translateX(1.5px);
+    opacity: 0.35;
+    mix-blend-mode: screen;
+    clip-path: inset(55% 0 10% 0);
 }
 
 .end-sub {
     color: var(--text-dim);
     letter-spacing: 0.2em;
     font-size: 0.8rem;
+}
+
+@keyframes staticFlicker {
+    0% { opacity: 1; }
+    50% { opacity: 0.92; }
+    100% { opacity: 1; }
+}
+
+@keyframes glitchSkew {
+    0% { transform: skewX(0deg); }
+    20% { transform: skewX(0.6deg); }
+    40% { transform: skewX(-0.7deg); }
+    60% { transform: skewX(0.3deg); }
+    100% { transform: skewX(0deg); }
+}
+
+/* ---------- Nokia Celular — direita, pixelado ---------- */
+#nokia-phone {
+    position: absolute;
+    right: 1.6rem;
+    bottom: 1.6rem;
+    z-index: 12;
+    pointer-events: auto;
+    font-family: 'Press Start 2P', 'VT323', monospace;
+}
+#nokia-phone.hidden { display: none !important; }
+.nokia-shell {
+    width: 280px;
+    background: linear-gradient(180deg, #1a3244 0%, #132535 100%);
+    border: 3px solid #2a4a5e;
+    border-radius: 18px 18px 28px 28px;
+    padding: 10px 10px 14px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.12);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+.nokia-brand {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 9px;
+    letter-spacing: 0.35em;
+    color: #c8d8e8;
+    text-shadow: 0 1px 0 rgba(0,0,0,0.6);
+}
+.lcd-screen {
+    --nokia-bg: #62a333;
+    --nokia-text: #0f1f0f;
+    --pixel-size: 3px;
+    background-color: var(--nokia-bg);
+    color: var(--nokia-text);
+    width: 100%;
+    aspect-ratio: 1.7 / 1;
+    position: relative;
+    display: flex;
+    padding: calc(var(--pixel-size) * 2);
+    box-sizing: border-box;
+    border: calc(var(--pixel-size) * 1.2) solid #1a2a1a;
+    border-radius: 6px;
+    box-shadow: inset 0 0 18px rgba(0,0,0,0.3), 0 0 18px rgba(98,163,51,0.15);
+    overflow: hidden;
+    image-rendering: pixelated;
+    font-family: 'VT323', 'Press Start 2P', monospace;
+    font-weight: 900;
+    cursor: pointer;
+}
+.lcd-screen::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    box-shadow: inset 0 0 22px rgba(0,0,0,0.35);
+    pointer-events: none;
+    z-index: 10;
+}
+.lcd-screen::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(0deg, rgba(0,0,0,0.08) 0, rgba(0,0,0,0.08) 1.5px, transparent 1.5px, transparent 3px);
+    pointer-events: none;
+    z-index: 11;
+}
+.lcd-screen .sidebar {
+    width: calc(var(--pixel-size) * 7);
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    align-items: center;
+    padding: calc(var(--pixel-size) * 2) 0;
+    z-index: 5;
+}
+.lcd-screen .bars-container {
+    display: flex;
+    flex-direction: column;
+    gap: calc(var(--pixel-size) * 1.2);
+    flex-grow: 1;
+    padding-top: calc(var(--pixel-size) * 2);
+}
+.lcd-screen .bar {
+    width: calc(var(--pixel-size) * 2.6);
+    height: calc(var(--pixel-size) * 4.5);
+    background-color: var(--nokia-text);
+}
+.lcd-screen .icon-antenna {
+    font-size: calc(var(--pixel-size) * 5);
+    line-height: 1;
+    font-weight: bold;
+    margin-top: auto;
+    transform: scaleY(1.15);
+    font-family: monospace;
+}
+.lcd-screen .icon-battery {
+    width: calc(var(--pixel-size) * 3.5);
+    height: calc(var(--pixel-size) * 5);
+    border: calc(var(--pixel-size) * 0.7) solid var(--nokia-text);
+    position: relative;
+    margin-top: auto;
+}
+.lcd-screen .icon-battery::before {
+    content: "";
+    position: absolute;
+    top: calc(var(--pixel-size) * -1.2);
+    left: 50%;
+    transform: translateX(-50%);
+    width: calc(var(--pixel-size) * 1.2);
+    height: calc(var(--pixel-size) * 1);
+    background-color: var(--nokia-text);
+}
+.lcd-screen .content {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 0 calc(var(--pixel-size) * 1.5);
+    z-index: 5;
+    position: relative;
+    overflow: hidden;
+}
+.lcd-screen .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    font-size: calc(var(--pixel-size) * 4);
+    letter-spacing: -0.5px;
+    padding-top: calc(var(--pixel-size) * 0.5);
+    font-family: 'Press Start 2P', monospace;
+    font-size: 7px;
+}
+.lcd-screen .icon-mail {
+    width: calc(var(--pixel-size) * 6);
+    height: calc(var(--pixel-size) * 3.5);
+    border: calc(var(--pixel-size) * 0.7) solid var(--nokia-text);
+    position: relative;
+    margin-top: calc(var(--pixel-size) * 0.5);
+}
+.lcd-screen .icon-mail::before {
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0; height: 50%;
+    border-bottom: calc(var(--pixel-size) * 0.7) solid var(--nokia-text);
+    border-radius: 0 0 50% 50%;
+}
+.lcd-screen .message-container {
+    flex-grow: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+.lcd-screen .message-text {
+    font-family: 'VT323', monospace;
+    font-size: 13px;
+    font-weight: 900;
+    text-transform: lowercase;
+    text-align: left;
+    line-height: 1.05;
+    letter-spacing: -0.3px;
+    word-wrap: break-word;
+    width: 100%;
+    padding-left: 4px;
+    animation: nokiaGlitch 0.18s steps(2);
+    text-shadow: 0 0 0 var(--nokia-text);
+}
+.lcd-screen .message-text::first-letter { text-transform: uppercase; }
+.lcd-screen .nokia-hint {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 5.5px;
+    letter-spacing: 0.04em;
+    opacity: 0.7;
+    text-align: center;
+    margin-top: 4px;
+    line-height: 1.2;
+}
+.lcd-screen .click-zone {
+    position: absolute;
+    top: 0; bottom: 0; width: 50%; z-index: 20;
+}
+.lcd-screen .click-zone.left { left: 0; }
+.lcd-screen .click-zone.right { right: 0; }
+.nokia-controls {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.nokia-btn {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 9px;
+    width: 36px;
+    height: 26px;
+    background: #0f1f2f;
+    color: #c8d8e8;
+    border: 1px solid #2a4a5e;
+    border-radius: 6px;
+    cursor: pointer;
+    box-shadow: 0 2px 0 #0a1622;
+}
+.nokia-btn:active { transform: translateY(1px); box-shadow: 0 1px 0 #0a1622; }
+.nokia-btn--select { width: 42px; background: #1e3a52; }
+.nokia-device-hint {
+    font-family: 'Press Start 2P', monospace;
+    font-size: 6px;
+    letter-spacing: 0.12em;
+    color: #7aa0c0;
+    opacity: 0.9;
+}
+@keyframes nokiaGlitch {
+    0% { opacity: 0; transform: translateY(-3px); }
+    50% { opacity: 0.6; transform: translateY(1px); }
+    100% { opacity: 1; transform: translateY(0); }
+}
+@media (max-width: 700px) {
+    #nokia-phone { right: 50%; transform: translateX(50%); bottom: 0.8rem; }
+    .nokia-shell { width: 86vw; max-width: 320px; }
 }

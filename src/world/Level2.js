@@ -86,6 +86,7 @@ class Stabilizer extends Interactable {
 export class Level2 extends Level {
     constructor(scene, { gameState, events, difficulty }) {
         super(scene);
+        this.footstepSurface = 'metal';
         this.gameState = gameState;
         this.events = events;
         this.difficulty = difficulty || 'normal';

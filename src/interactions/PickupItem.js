@@ -14,14 +14,15 @@ export class PickupItem extends Interactable {
     setupEffects() {
         const mesh = this.meshes[0];
         
-        // glow maior e mais visível para reconhecer objeto à distância
+        // glow maior mas agora com oclusão real (não atravessa parede)
         const glowGeo = new THREE.SphereGeometry(0.32, 16, 12);
         const glowMat = new THREE.MeshBasicMaterial({
             color: this.id === 'fuse' ? 0xffcc44 : 0x44aaff,
             transparent: true,
-            opacity: 0.22,
+            opacity: 0.16,
+            depthTest: true,
             depthWrite: false,
-            side: THREE.BackSide
+            side: THREE.FrontSide
         });
         this.glowMesh = new THREE.Mesh(glowGeo, glowMat);
         // posição local no centro do objeto (não copia world pos)
@@ -47,6 +48,7 @@ export class PickupItem extends Interactable {
             size: 0.07,
             transparent: true,
             opacity: 0.85,
+            depthTest: true,
             depthWrite: false,
             blending: THREE.AdditiveBlending,
             sizeAttenuation: true

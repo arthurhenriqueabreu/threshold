@@ -72,18 +72,25 @@ export class Lighting {
         this.pointLights = [];
         this.flickeringLights = [];
         this.lightCellMap = new Map();
+        this.ambient = null;
+        this.hemisphere = null;
     }
 
     setup(lightData, flickerIndices = [], flickerIntensity = 1.0) {
-        const ambient = new THREE.AmbientLight(0xfff2cc, CONFIG.atmosphere.ambientIntensity);
-        const hemisphere = new THREE.HemisphereLight(0xfff4d6, 0x5a5238, 0.85);
+        // Difícil não escurece mais — só fog, luz igual ao normal para ficar jogável
+        const ambientIntensity = CONFIG.atmosphere.ambientIntensity;
+        const hemiIntensity = 0.85;
+        const ambient = new THREE.AmbientLight(0xfff2cc, ambientIntensity);
+        const hemisphere = new THREE.HemisphereLight(0xfff4d6, 0x5a5238, hemiIntensity);
         this.scene.add(ambient, hemisphere);
+        this.ambient = ambient;
+        this.hemisphere = hemisphere;
 
         lightData.forEach(({ col, row, position }, index) => {
-            // Fluorescentes mais presentes: intensidade maior e falloff mais
-            // suave (decay menor) para iluminar o corredor e evitar "massa
-            // preta" nos cantos. Continua com alcance amplo.
-            const light = new THREE.PointLight(0xffe9b0, 3.2, 26, 1.2);
+            const baseIntensity = 3.2;
+            const distance = 26;
+            const decay = 1.2;
+            const light = new THREE.PointLight(0xffe9b0, baseIntensity, distance, decay);
             light.position.set(position.x, CONFIG.game.wallHeight - 0.4, position.z);
             this.scene.add(light);
             this.pointLights.push(light);
@@ -114,6 +121,19 @@ export class Lighting {
         for (const flickering of this.flickeringLights) {
             flickering.baseIntensity *= boost;
         }
+    }
+
+    dispose() {
+        for (const light of this.pointLights) {
+            this.scene.remove(light);
+        }
+        if (this.ambient) this.scene.remove(this.ambient);
+        if (this.hemisphere) this.scene.remove(this.hemisphere);
+        this.pointLights = [];
+        this.flickeringLights = [];
+        this.lightCellMap.clear();
+        this.ambient = null;
+        this.hemisphere = null;
     }
 
     update(delta) {

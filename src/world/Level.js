@@ -61,6 +61,7 @@ export class Level {
     }
 
     dispose() {
+        if (this.lighting) this.lighting.dispose();
         this.group.traverse((object) => {
             if (object.geometry) {
                 object.geometry.dispose();
@@ -75,5 +76,10 @@ export class Level {
             }
         });
         this.scene.remove(this.group);
+        // remove painel light se existir
+        if (this._panelLight) {
+            this.scene.remove(this._panelLight);
+            this._panelLight = null;
+        }
     }
 }

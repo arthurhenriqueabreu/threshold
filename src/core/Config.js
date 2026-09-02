@@ -23,7 +23,7 @@ export const CONFIG = {
     },
 
     atmosphere: {
-        fogColor: 0x3a3324,
+        fogColor: 0x000000,
         fogDensity: 0.02,
         ambientIntensity: 1.0
     },
@@ -46,7 +46,6 @@ export const CONFIG = {
     },
 
     entities: {
-        // raio (em células) de início da observação / perseguição por modo de inimigo
         observeRangeEasy: 7,
         observeRangeNormal: 9,
         observeRangeHard: 11,
@@ -61,7 +60,12 @@ export const CONFIG = {
         searchTime: 3.5,
         disappearTime: 1.2,
         stalkTime: 5,
-        modelHeight: 2.0
+        modelHeight: 2.0,
+        // novo: tempo sem visão para considerar despistado + respawn
+        loseTime: 3.2,
+        vanishTime: 0.7,
+        respawnDelay: { min: 7, max: 13 },
+        observeDelay: { benign: 0.6, stalker: 0.4, timid: 0.35, aggressive: 0.12 }
     },
 
     items: {
@@ -93,6 +97,12 @@ export const CONFIG = {
         postGamma: 0.85,
         fogNear: 12,
         fogFar: 62,
+        // Fog preto por dificuldade (quanto mais difícil, mais perto)
+        fogByDifficulty: {
+            easy: { near: 12, far: 34 },
+            normal: { near: 11, far: 32 },
+            hard: { near: 6, far: 18 }
+        },
         portalPixelGrid: 96,
         // Quando VR/WebXR for habilitado futuramente, este preset desativa/amacia
         // os efeitos que podem causar desconforto. Não está ativo por enquanto.
@@ -109,14 +119,14 @@ export const CONFIG = {
     difficulty: {
         easy: {
             name: 'FÁCIL',
-            description: 'Minimapa, guia ativo, entidades apenas observam e desaparecem',
+            description: 'Minimapa, guia ativo, entidade stalker (só observa e segue, não mata)',
             hasGuide: true,
             hasMinimap: true,
             hasEntities: true,
             hasRadarRequirement: false,
             hasPhoneRequirement: false,
             hasFlashlightRequirement: false,
-            enemyMode: 'benign',        // IDLE_HIDDEN -> OBSERVING -> DISAPPEARING
+            enemyMode: 'stalker',        // só segue à distância, nunca CHASING
             darkness: 1.0,
             entityCount: 1,
             interactionDistanceMult: 1.5,
@@ -135,7 +145,7 @@ export const CONFIG = {
             hasFlashlightRequirement: false,
             enemyMode: 'timid',         // OBSERVING -> STALKING -> CHASING (tarde)
             darkness: 1.0,
-            entityCount: 2,
+            entityCount: 1,
             interactionDistanceMult: 1.0,
             flickerIntensity: 1.0,
             ambientEventChance: 0.35,
@@ -143,16 +153,16 @@ export const CONFIG = {
         },
         hard: {
             name: 'DIFÍCIL',
-            description: 'Sem radar/celular, mais escuro, exige lanterna; entidades agressivas',
+            description: 'Exige lanterna e celular (Q alterna lanterna); entidades agressivas',
             hasGuide: false,
             hasMinimap: false,
             hasEntities: true,
             hasRadarRequirement: false,
             hasPhoneRequirement: false,
             hasFlashlightRequirement: true,
-            enemyMode: 'aggressive',   // OBSERVING -> CHASING rápido
-            darkness: 0.6,
-            entityCount: 3,
+            enemyMode: 'aggressive',
+            darkness: 1.0,
+            entityCount: 1,
             interactionDistanceMult: 0.8,
             flickerIntensity: 1.8,
             ambientEventChance: 0.65,

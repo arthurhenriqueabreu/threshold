@@ -1,0 +1,56 @@
+// Manifest central de áudio — paths únicos, sem espalhar strings
+export const AudioManifest = {
+  footstepCarpet01: '/audio/footsteps/carpet/01.wav',
+  footstepCarpet02: '/audio/footsteps/carpet/02.wav',
+  footstepCarpet03: '/audio/footsteps/carpet/03.wav',
+  footstepCarpet04: '/audio/footsteps/carpet/04.wav',
+  footstepCarpet05: '/audio/footsteps/carpet/05.wav',
+  footstepCarpet06: '/audio/footsteps/carpet/06.wav',
+  footstepCarpet07: '/audio/footsteps/carpet/07.wav',
+  footstepCarpet08: '/audio/footsteps/carpet/08.wav',
+  footstepConcrete01: '/audio/footsteps/concrete/01.wav',
+  footstepConcrete02: '/audio/footsteps/concrete/02.wav',
+  footstepConcrete03: '/audio/footsteps/concrete/03.wav',
+  footstepConcrete04: '/audio/footsteps/concrete/04.wav',
+  footstepConcrete05: '/audio/footsteps/concrete/05.wav',
+  footstepConcrete06: '/audio/footsteps/concrete/06.wav',
+  footstepMetal01: '/audio/footsteps/metal/01.wav',
+  footstepMetal02: '/audio/footsteps/metal/02.wav',
+  footstepMetal03: '/audio/footsteps/metal/03.wav',
+  footstepMetal04: '/audio/footsteps/metal/04.wav',
+  footstepMetal05: '/audio/footsteps/metal/05.wav',
+  footstepMetal06: '/audio/footsteps/metal/06.wav',
+  entityBreath01: '/audio/entity/breathing/breath01.wav',
+  entityBreath02: '/audio/entity/breathing/breath02.wav',
+  entityBreath03: '/audio/entity/breathing/breath03.wav',
+  entityGrowl01: '/audio/entity/growls/growl01.wav',
+  entityGrowl02: '/audio/entity/growls/growl02.wav',
+  entityGrowl03: '/audio/entity/growls/growl03.wav',
+  entityGrowl04: '/audio/entity/growls/growl04.wav',
+  entityVanish01: '/audio/entity/vanish/vanish01.wav',
+  entityVanish02: '/audio/entity/vanish/vanish02.wav',
+  entityVanish03: '/audio/entity/vanish/vanish03.wav',
+  doorOpen01: '/audio/world/doors/open01.wav',
+  doorOpen02: '/audio/world/doors/open02.wav',
+  doorOpen03: '/audio/world/doors/open03.wav',
+  flicker01: '/audio/world/fluorescent/flick01.wav',
+  flicker02: '/audio/world/fluorescent/flick02.wav',
+  portalHum: '/audio/portal/hum.wav',
+  phoneBoot: '/audio/phone/boot.wav',
+  phoneDtmf01: '/audio/phone/dtmf01.wav',
+  phoneDtmf02: '/audio/phone/dtmf02.wav',
+  phoneDtmf03: '/audio/phone/dtmf03.wav',
+  phoneDtmf04: '/audio/phone/dtmf04.wav',
+  heartbeat: '/audio/player/heartbeat.wav',
+  uiConfirm: '/audio/ui/confirm.wav',
+};
+
+export const FootstepGroups = {
+  carpet: ['footstepCarpet01','footstepCarpet02','footstepCarpet03','footstepCarpet04','footstepCarpet05','footstepCarpet06','footstepCarpet07','footstepCarpet08'],
+  concrete: ['footstepConcrete01','footstepConcrete02','footstepConcrete03','footstepConcrete04','footstepConcrete05','footstepConcrete06'],
+  metal: ['footstepMetal01','footstepMetal02','footstepMetal03','footstepMetal04','footstepMetal05','footstepMetal06'],
+};
+
+export const EntityBreaths = ['entityBreath01','entityBreath02','entityBreath03'];
+export const EntityGrowls = ['entityGrowl01','entityGrowl02','entityGrowl03','entityGrowl04'];
+export const EntityVanish = ['entityVanish01','entityVanish02','entityVanish03'];

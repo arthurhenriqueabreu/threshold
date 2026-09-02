@@ -10,7 +10,7 @@ export class EntityManager {
         this.playerPosRef = playerPosRef || new THREE.Vector3();
         this.entities = [];
 
-        const n = count ?? CONFIG.difficulty.normal.entityCount;
+        const n = Math.min(count ?? CONFIG.difficulty.normal.entityCount, 1);
         for (let i = 0; i < n; i++) {
             const entity = new BackroomsEntity({
                 level,
@@ -26,8 +26,9 @@ export class EntityManager {
 
     placeEntity(entity, index) {
         const playerCell = this.level.worldToCell(this.playerPosRef.x, this.playerPosRef.z);
+        const rVis = entity._visualRadius || 0.55;
         let chosen = null;
-        for (let attempts = 0; attempts < 30; attempts++) {
+        for (let attempts = 0; attempts < 40; attempts++) {
             const c = Math.floor(Math.random() * this.level.cols);
             const r = Math.floor(Math.random() * this.level.rows);
             if (this.level.grid[r][c] === '#') continue;
@@ -36,12 +37,17 @@ export class EntityManager {
             const cellOpen = this.freeCell(c, r);
             if (!cellOpen) continue;
             const w = this.level.cellToWorld(c, r);
-            chosen = new THREE.Vector3(w.x, 0, w.z);
+            // garante que o monstro cabe centralizado no corredor (sem enterrar na parede)
+            if (this.level.isSolidAt(w.x + rVis, w.z) || this.level.isSolidAt(w.x - rVis, w.z) ||
+                this.level.isSolidAt(w.x, w.z + rVis) || this.level.isSolidAt(w.x, w.z - rVis)) {
+                continue;
+            }
+            chosen = new THREE.Vector3(w.x, 0.015, w.z);
             break;
         }
         if (!chosen) {
             const w = this.level.cellToWorld(3, 3);
-            chosen = new THREE.Vector3(w.x, 0, w.z);
+            chosen = new THREE.Vector3(w.x, 0.015, w.z);
         }
         entity.group.position.copy(chosen);
         entity.group.visible = false;
@@ -57,13 +63,17 @@ export class EntityManager {
 
     update(delta, time, onCaught) {
         const playerPos = this.playerPosRef;
-        // invalida temporariamente os pontos de luz próximos ao ver entidade (atmosférico)
         for (const entity of this.entities) {
-            entity.setPlayerPos(playerPos);
-            entity.update(delta, time);
+            try {
+                entity.setPlayerPos(playerPos);
+                entity.update(delta, time);
+            } catch (err) {
+                console.warn('[EntityManager] entity.update falhou, isolando', err);
+                continue;
+            }
             if (entity.caughtPlayer) {
                 entity.caughtPlayer = false;
-                if (onCaught) onCaught(entity);
+                if (onCaught) try { onCaught(entity); } catch (e) { console.warn('[EntityManager] onCaught falhou', e); }
             }
         }
     }

@@ -4,6 +4,7 @@ import { eventBus } from './EventBus.js';
 import { GameState } from './GameState.js';
 import { InputManager } from '../systems/InputManager.js';
 import { AudioManager } from '../systems/AudioManager.js';
+import { AudioManifest } from '../audio/AudioManifest.js';
 import { NotificationSystem } from '../systems/NotificationSystem.js';
 import { ObjectiveManager } from '../systems/ObjectiveManager.js';
 import { ScoreManager } from '../systems/ScoreManager.js';
@@ -19,6 +20,9 @@ import { EndScreen } from '../ui/EndScreen.js';
 import { UIManager } from '../ui/UIManager.js';
 import { RetroRenderer } from '../rendering/RetroRenderer.js';
 import { clearRetroHandles } from '../rendering/RetroMaterial.js';
+import { StaticEffect } from '../ui/StaticEffect.js';
+import { ProximityStatic } from '../ui/ProximityStatic.js';
+import { NokiaPhone } from '../ui/NokiaPhone.js';
 
 const ITEM_ONLY_IDS = ['radar', 'phone', 'flashlight'];
 const PICKUP_MESSAGES = {
@@ -55,6 +59,10 @@ export class Game {
         this.flashlightOn = false;
         this.phoneTimer = 0;
         this.transitioning = false;
+        this._lastPlayStart = 0;
+        this.staticEffect = new StaticEffect();
+        this.proximityStatic = new ProximityStatic();
+        this.nokiaPhone = null;
     }
 
     init() {
@@ -67,12 +75,14 @@ export class Game {
         this.retroRenderer.setSize(window.innerWidth, window.innerHeight);
 
         this.scene = new THREE.Scene();
-        this.scene.background = new THREE.Color(CONFIG.atmosphere.fogColor);
+        // fog preto em todos os níveis
+        this.scene.background = new THREE.Color(0x000000);
         this.scene.fog = new THREE.Fog(
-            CONFIG.atmosphere.fogColor,
+            0x000000,
             CONFIG.retro.fogNear,
             CONFIG.retro.fogFar
         );
+        this._baseFog = { near: CONFIG.retro.fogNear, far: CONFIG.retro.fogFar };
 
         this.camera = new THREE.PerspectiveCamera(
             CONFIG.graphics.fov,
@@ -89,6 +99,15 @@ export class Game {
         this.objectiveManager = new ObjectiveManager(this.gameState);
         this.scoreManager = new ScoreManager(this.gameState);
 
+        // Registro central de pontuação: todo objetivo concluído pontua de
+        // acordo com CONFIG.scoring. addScore é idempotente (Set), então não
+        // soma em dobro mesmo quando o caminho de coleta também pontua.
+        // Isso garante que gerador (Level1) e estabilizador (Level2), que usam
+        // gameState.completeObjective diretamente, também recebam seus pontos.
+        this.unsubscribeObjectiveScoring = eventBus.on('objective:completed', (id) => {
+            this.scoreManager.award(id);
+        });
+
         this.interactionSystem = new InteractionSystem(this.camera);
         this.interactionSystem.onPromptChange = (prompt) => this.hud.setPrompt(prompt);
         this.input.onInteract(() => {
@@ -99,6 +118,14 @@ export class Game {
         this.input.onKeyPress('KeyF', () => this.toggleFlashlight());
 
         this.hud = new HUD();
+        this.nokiaPhone = new NokiaPhone({ input: this.input, gameState: this.gameState, audio: this.audio, camera: this.camera, scene: this.scene });
+        // Toggle celular na direita com Q; quando aberto consome WASD/Arrows para navegação sem mover player
+        this.input.onKeyPress('KeyQ', () => this.togglePhone());
+        this.input.onKeyPress('ArrowLeft', () => { if (this.nokiaPhone?.isOpen) this.nokiaPhone.navigate(-1); });
+        this.input.onKeyPress('ArrowRight', () => { if (this.nokiaPhone?.isOpen) this.nokiaPhone.navigate(1); });
+        this.input.onKeyPress('ArrowUp', () => { if (this.nokiaPhone?.isOpen) { this.nokiaPhone.navigate(-1); return; } });
+        this.input.onKeyPress('ArrowDown', () => { if (this.nokiaPhone?.isOpen) { this.nokiaPhone.navigate(1); return; } });
+        document.getElementById('item-phone')?.addEventListener('click', () => this.togglePhone());
         this.ui = new UIManager({
             onUiClick: () => this.audio.sfx('ui'),
             onResume: () => this.resume(),
@@ -118,17 +145,32 @@ export class Game {
         document.getElementById('btn-go-restart')?.addEventListener('click', () => this.restart());
         document.getElementById('btn-go-menu')?.addEventListener('click', () => this.backToMenu());
 
-        document.addEventListener('pointerdown', () => {
-            if (this.gameState.state === 'PLAYING' && document.pointerLockElement === null) {
+        const tryLock = () => {
+            if (this.gameState.state === 'PLAYING' && document.pointerLockElement === null && !this.transitioning) {
                 this.requestPointerLock();
             }
-        });
+        };
+        // Clique no canvas ou em qualquer lugar durante PLAYING tenta travar
+        document.addEventListener('pointerdown', tryLock);
+        document.addEventListener('click', tryLock);
 
         document.addEventListener('pointerlockchange', () => this.onPointerLockChange());
+        document.addEventListener('pointerlockerror', () => {
+            console.warn('[Game] pointer lock falhou');
+            // Fallback: avisa que pode arrastar com botão do mouse
+            if (this.gameState.state === 'PLAYING') {
+                this.notificationSystem.show('CLIQUE E ARRASTE PARA OLHAR\nOU CLIQUE NOVAMENTE PARA TRAVAR MOUSE', { warning: true });
+            }
+        });
         window.addEventListener('resize', () => this.onResize());
 
         this.animate = this.animate.bind(this);
         this.renderer.setAnimationLoop(this.animate);
+
+        // pre-carrega assets de áudio (CC0 procedural) em background
+        this.audio.loadSounds(AudioManifest).then(res => {
+            console.log('[Audio] manifest carregado', res);
+        });
 
         this.showLoadingDone();
     }
@@ -142,7 +184,22 @@ export class Game {
         return {
             notify: (msg, opts) => this.notificationSystem.show(msg, opts),
             sfx: (name) => this.audio.sfx(name),
-            onPowerRestored: () => this.objectiveManager.complete('power'),
+            sfxPositional: (name, pos, opts) => {
+                // tenta asset posicional se existir, senão fallback sfx
+                const map = { distant: 'distant' };
+                // para distant usamos playPositional se buffer existir, senão sfx global
+                try {
+                    if (pos && this.audio.buffers && this.audio.buffers.size > 0) {
+                        // usa world bus com HRTF
+                        // distant não tem buffer dedicado, usa sfx normal
+                    }
+                } catch {}
+                this.audio.sfx(name);
+            },
+            onPowerRestored: () => {
+                this.objectiveManager.complete('power');
+                try { this.audio.sfx('power'); this.audio.setBusVolume('ambient', 0.3, 0.15); setTimeout(()=> this.audio.setBusVolume('ambient', 1, 1.2), 800); } catch {}
+            },
             onDoorOpened: () => eventBus.emit('door:opened')
         };
     }
@@ -152,12 +209,15 @@ export class Game {
         this.diffConfig = CONFIG.difficulty[difficulty];
         this.gameState.setPlayerName(playerName);
         this.gameState.setState('PLAYING');
+        this._lastPlayStart = performance.now();
         this.mainMenu.hide();
         this.hud.setDifficulty(difficulty);
         this.hud.show();
         this.loadLevel();
+        this.proximityStatic.start();
         this.requestPointerLock();
-        this.audio.startAmbient(this.diffConfig.flickerIntensity > 1 ? 1.3 : 1.0);
+        try { this.audio.setReverbForLevel(this.levelIndex); } catch {}
+        this.audio.startAmbient(this.diffConfig.flickerIntensity > 1 ? 1.3 : 1.0, this.levelIndex);
     }
 
     loadLevel(index = this.gameState.currentLevelIndex) {
@@ -199,6 +259,13 @@ export class Game {
             this.level.lighting?.setPowerRestored(1.35);
             this.notificationSystem.show('ANOMALIA ESTABILIZADA\nPORTAL DISPONÍVEL');
             this.audio.sfx('portal');
+            try {
+                if (this.level.portal?.group) {
+                    const p = this.level.portal.group.position;
+                    this._portalHum = this.audio.playPositional('portalHum', new THREE.Vector3(p.x, 1, p.z), { volume: 0.16, loop: true, bus: 'world', refDistance: 2, maxDistance: 38, rolloff: 0.7 });
+                    if (this._portalHum) this.audio.fadeGain(this._portalHum.gain.gain, 0.16, 1.2);
+                }
+            } catch {}
         });
 
         this.setupEntities();
@@ -207,6 +274,7 @@ export class Game {
         }
         this.applyDarkness();
         this.updateItemUiFromState();
+        if (this.gameState.state === 'PLAYING') this.proximityStatic.start();
     }
 
     wirePickups() {
@@ -247,12 +315,35 @@ export class Game {
             this.hud.setRadarEnabled(true);
         } else if (itemId === 'phone') {
             this.hud.setPhoneEnabled(true);
+            this.nokiaPhone?.setEnabled(true);
+            this.nokiaPhone?.addMessage('SINAL VINCULADO.\nTRANSMISSÕES RECEBIDAS.');
             this.hud.showPhoneText('SINAL VINCULADO. \nTRANSMISSÕES RECEBIDAS.', 2800);
+            this.notificationSystem.show('CELULAR [Q] PARA ABRIR', { warning: false });
         } else if (itemId === 'flashlight') {
             if (!this.flashlight) {
                 this.setupFlashlight();
             }
             this.hud.setItemOn('flashlight', false);
+        }
+    }
+
+    togglePhone() {
+        if (this.gameState.state !== 'PLAYING') return;
+        if (!this.gameState.hasItem('phone')) {
+            this.notificationSystem.show('CELULAR NÃO ENCONTRADO', { warning: true });
+            return;
+        }
+        const wasOpen = this.nokiaPhone?.isOpen;
+        // alternância: se lanterna ligada, desliga ao abrir celular
+        if (!wasOpen && this.flashlightOn && this.flashlight) {
+            this.flashlightOn = this.flashlight.toggle() ? true : false;
+            if (!this.flashlightOn) this.hud.setItemOn('flashlight', false);
+        }
+        if (this.nokiaPhone?.toggle()) {
+            this.input.clearActions();
+            document.exitPointerLock();
+        } else if (wasOpen) {
+            this.requestPointerLock();
         }
     }
 
@@ -266,6 +357,11 @@ export class Game {
     }
 
     toggleFlashlight() {
+        if (this.nokiaPhone?.isOpen) {
+            // alternância: fecha celular e liga lanterna
+            this.nokiaPhone.close();
+            this.requestPointerLock();
+        }
         if (this.gameState.state !== 'PLAYING' || !this.flashlight) {
             return;
         }
@@ -290,30 +386,39 @@ export class Game {
         this.entityManager = new EntityManager({
             level: this.level,
             enemyMode: this.diffConfig.enemyMode,
-            count: this.diffConfig.entityCount,
+            count: 1,
             events: this.events(),
             playerPosRef
         });
     }
 
     applyDarkness() {
-        const darkness = this.diffConfig?.darkness ?? 1.0;
-        if (darkness < 1 && this.level?.lighting) {
-            for (const light of this.level.lighting.pointLights) {
-                light.intensity *= darkness;
-            }
+        // Fog preto em todos os níveis — quanto mais difícil, mais perto
+        const fogCfg = CONFIG.retro.fogByDifficulty?.[this.difficulty] || { near: CONFIG.retro.fogNear, far: CONFIG.retro.fogFar };
+        if (this.scene.fog) {
+            this.scene.fog.color.set(0x000000);
+            this.scene.background = new THREE.Color(0x000000);
+            this.scene.fog.near = fogCfg.near;
+            this.scene.fog.far = fogCfg.far;
+            this._baseFog = { near: fogCfg.near, far: fogCfg.far };
         }
-        if (darkness < 1 && this.scene.fog) {
-            this.scene.fog.near = CONFIG.retro.fogNear * darkness;
-            this.scene.fog.far = CONFIG.retro.fogFar * darkness;
-        }
+        // Mantém luzes pontuais normais (visibilidade vem do fog + lanterna dinâmica)
+        // Não escurece ambient — lanterna faz o papel de estender visão
     }
 
     resetFog() {
+        const fallback = CONFIG.retro.fogByDifficulty?.[this.difficulty] || { near: CONFIG.retro.fogNear, far: CONFIG.retro.fogFar };
         if (this.scene.fog) {
-            this.scene.fog.near = CONFIG.retro.fogNear;
-            this.scene.fog.far = CONFIG.retro.fogFar;
+            this.scene.fog.color.set(0x000000);
+            this.scene.fog.near = fallback.near;
+            this.scene.fog.far = fallback.far;
         }
+        if (this.scene.background) {
+            this.scene.background.set(0x000000);
+        }
+        this._baseFog = { near: fallback.near, far: fallback.far };
+        if (this.level?.lighting?.ambient) this.level.lighting.ambient.intensity = CONFIG.atmosphere.ambientIntensity;
+        if (this.level?.lighting?.hemisphere) this.level.lighting.hemisphere.intensity = 0.85;
     }
 
     handlePortalEnter() {
@@ -329,9 +434,11 @@ export class Game {
         this.input.clearActions();
         document.exitPointerLock();
         const nextName = CONFIG.levels.names[this.gameState.currentLevelIndex] ?? 'NÍVEL ?';
+        try { this.audio.stopAll(); } catch {}
         this.ui.fadeIn(700).then(async () => {
             this.unloadLevel();
             this.loadLevel();
+            try { this.audio.setReverbForLevel(this.levelIndex); this.audio.startAmbient(this.diffConfig.flickerIntensity > 1 ? 1.3 : 1.0, this.levelIndex); } catch {}
             this.ui.fadeOut(500);
             await this.endScreen.showLevelIntro({ title: nextName }, 2000);
             this.transitioning = false;
@@ -346,6 +453,7 @@ export class Game {
         }
         const text = PHONE_MESSAGES[Math.floor(Math.random() * PHONE_MESSAGES.length)];
         this.hud.showPhoneText(text, 3500);
+        this.nokiaPhone?.addMessage(text);
         this.audio.sfx('whisper');
     }
 
@@ -356,6 +464,14 @@ export class Game {
     }
 
     unloadLevel() {
+        if (this._portalHum) {
+            try {
+                const h = this._portalHum;
+                this.audio.fadeGain(h.gain.gain, 0, 0.6);
+                setTimeout(()=>{ try{ h.stop(); }catch{} }, 650);
+            } catch {}
+            this._portalHum=null;
+        }
         if (this.unsubscribePortal) {
             this.unsubscribePortal();
             this.unsubscribePortal = null;
@@ -367,6 +483,9 @@ export class Game {
         if (this.flashlight && this.flashlightOn) {
             this.flashlight.toggle();
         }
+        if (this.player) {
+            this.player.dispose?.();
+        }
         this.interactionSystem.interactables = [];
         this.interactionSystem.currentTarget = null;
         this.hud.setPrompt(null);
@@ -377,6 +496,11 @@ export class Game {
     }
 
     cleanupRun() {
+        this.staticEffect.stop();
+        this.proximityStatic.stop();
+        try { this.nokiaPhone?.close(); } catch {}
+        try { this.audio.stopAll(); } catch {}
+        try { this.audio.setProximityIntensity(0); } catch {}
         this.unloadLevel();
         if (this.flashlight) {
             this.flashlight.dispose();
@@ -394,6 +518,7 @@ export class Game {
         }
         this.gameState.setState('COMPLETED');
         this.transitioning = true;
+        try { this.audio.stopAll(); } catch {}
         this.scoreManager.award('escape');
         this.input.clearActions();
         document.exitPointerLock();
@@ -425,24 +550,49 @@ export class Game {
         this.input.clearActions();
         document.exitPointerLock();
 
+        try { this.audio.stopAll(); } catch {}
         this.audio.sfx('denied');
-        await this.ui.fadeIn(900);
+        // para ruído de proximidade e liga chuvisco total de game over
+        this.proximityStatic.stop();
+        this.staticEffect.start();
+        await this.ui.fadeIn(700);
         this.hud.hide();
         document.getElementById('go-player').textContent = this.gameState.playerName;
         document.getElementById('go-score').textContent = String(this.gameState.score).padStart(3, '0');
         document.getElementById('game-over-screen').classList.remove('hidden');
-        this.ui.fadeOut(500);
+        this.ui.fadeOut(300);
     }
 
     requestPointerLock() {
-        const result = this.renderer.domElement.requestPointerLock();
+        const el = this.renderer?.domElement;
+        if (!el || typeof el.requestPointerLock !== 'function') return;
+        // Garante foco antes de travar (alguns browsers exigem)
+        try { el.focus?.(); } catch {}
+        const result = el.requestPointerLock();
         if (result && typeof result.catch === 'function') {
-            result.catch(() => {});
+            result.catch((err) => {
+                console.warn('[Game] requestPointerLock falhou:', err?.message ?? err);
+            });
         }
     }
 
     onPointerLockChange() {
+        // Se o lock foi adquirido, esconde pausa caso estivesse visível
+        if (document.pointerLockElement !== null) {
+            if (this.gameState.state === 'PAUSED') {
+                if (this.ui.isPauseVisible()) {
+                    this.ui.hidePause();
+                    this.gameState.setState('PLAYING');
+                    this._lastPlayStart = performance.now();
+                }
+            }
+            return;
+        }
+        // Evita pausar imediatamente após entrar em PLAYING (lock ainda não concedido)
+        // - sem isso a câmera/minimapa parecem congelados no primeiro segundo
         if (document.pointerLockElement === null && this.gameState.state === 'PLAYING' && !this.transitioning) {
+            const elapsedSincePlay = performance.now() - this._lastPlayStart;
+            if (elapsedSincePlay < 900) return;
             this.pause();
         }
     }
@@ -451,14 +601,19 @@ export class Game {
         this.gameState.setState('PAUSED');
         this.input.clearActions();
         this.ui.showPause();
+        try { this.audio.context?.suspend?.(); } catch {}
     }
 
     resume() {
         this.gameState.setState('PLAYING');
+        this._lastPlayStart = performance.now();
+        try { this.audio.context?.resume?.(); } catch {}
         this.requestPointerLock();
     }
 
     restart() {
+        this.staticEffect.stop();
+        this.proximityStatic.stop();
         this.cleanupRun();
         this.transitioning = false;
         this.endScreen.hide();
@@ -470,12 +625,15 @@ export class Game {
         this.hud.reset();
         this.hud.setDifficulty(this.difficulty);
         this.gameState.setState('PLAYING');
+        this._lastPlayStart = performance.now();
         this.hud.show();
         this.loadLevel();
         this.requestPointerLock();
     }
 
     backToMenu() {
+        this.staticEffect.stop();
+        this.proximityStatic.stop();
         this.cleanupRun();
         this.transitioning = false;
         this.endScreen.hide();
@@ -499,34 +657,166 @@ export class Game {
         const playing = this.gameState.state === 'PLAYING';
         if (playing) {
             this.gameState.elapsedSeconds += delta;
-            this.player.update(delta, true);
-            this.level.setPlayerPosition(this.player.getPosition());
-            this.interactionSystem.update();
+            try {
+                this.player.update(delta, true);
+                this.level.setPlayerPosition(this.player.getPosition());
+            } catch (err) {
+                console.warn('[Game] player.update falhou', err);
+            }
+            try { this.interactionSystem.update(); } catch (err) { console.warn('[Game] interactionSystem.update falhou', err); }
             if (this.level.updateAmbientEvents) {
-                this.level.updateAmbientEvents(delta, time);
+                try { this.level.updateAmbientEvents(delta, time); } catch (err) { console.warn('[Game] ambientEvents falhou', err); }
             }
             if (this.entityManager) {
-                this.entityManager.update(delta, time, () => this.gameOver());
+                try { this.entityManager.update(delta, time, () => this.gameOver()); } catch (err) { console.warn('[Game] entityManager.update falhou', err); }
+                try { this.updateProximityNoise(); } catch (err) { console.warn('[Game] proximity update falhou', err); }
+            } else {
+                try { this.proximityStatic.setIntensity(0); } catch {}
             }
             if (this.flashlight) {
-                this.flashlight.update(delta, time);
+                try { this.flashlight.update(delta, time); } catch (err) { console.warn('[Game] flashlight.update falhou', err); }
+                try { this.updateDynamicFog(delta, time); } catch (err) { console.warn('[Game] dynamic fog falhou', err); }
+            } else {
+                try { this.updateDynamicFog(delta, time); } catch {}
             }
+            if (this.nokiaPhone?.update) {
+                try { this.nokiaPhone.update(delta, time); } catch {}
+            }
+            try { this.audio.updateListener(this.camera); } catch {}
 
             if (this.gameState.hasItem('phone')) {
                 this.phoneTimer += delta;
                 if (this.phoneTimer > 18) {
                     this.phoneTimer = 0;
-                    this.sendPhoneMessage();
+                    try { this.sendPhoneMessage(); } catch {}
                 }
             }
-            this.hud.updateMinimap(this.player.getPosition(), this.player.controller.yaw);
+            try { this.hud.updateMinimap(this.player.getPosition(), this.player.controller.yaw); } catch (err) { console.warn('[Game] minimap update falhou', err); }
+            // passos do jogador -> sfx footstep por superfície
+            try {
+                const moving = this.input?.actions && (this.input.actions.forward || this.input.actions.backward || this.input.actions.left || this.input.actions.right);
+                const sprint = this.input?.actions?.sprint;
+                const surface = this.level?.footstepSurface || 'carpet';
+                if (moving && this.gameState.state === 'PLAYING') this.audio.playFootstep(sprint, surface);
+            } catch {}
         }
 
         if (this.level) {
-            this.level.update(delta, time);
+            try { this.level.update(delta, time); } catch (err) { console.warn('[Game] level.update falhou', err); }
         }
 
-        this.retroRenderer.render(this.scene, this.camera, time);
+        try { this.retroRenderer.render(this.scene, this.camera, time); } catch (err) { console.warn('[Game] render falhou', err); }
+    }
+
+    updateDynamicFog(delta, time) {
+        if (!this.scene?.fog || !this._baseFog) return;
+        const isOn = this.flashlight?.isOn() && this.gameState?.hasItem('flashlight');
+        // bônus de visão com lanterna: quanto mais difícil, maior o ganho
+        const bonusByDiff = this.difficulty === 'hard' ? 16 : this.difficulty === 'normal' ? 10 : 6;
+        const targetFar = this._baseFog.far + (isOn ? bonusByDiff + Math.sin(time * 2.1) * 1.2 : 0);
+        const targetNear = this._baseFog.near + (isOn ? 2.5 + Math.sin(time * 1.3) * 0.6 : 0);
+        // lerp suave
+        const lerp = 1 - Math.pow(0.001, delta * 3); // ~0.15 a 60fps
+        // fallback para delta grande
+        const t = Math.min(1, delta * 4);
+        const mix = lerp || t;
+        this.scene.fog.far += (targetFar - this.scene.fog.far) * Math.min(1, delta * 5);
+        this.scene.fog.near += (targetNear - this.scene.fog.near) * Math.min(1, delta * 5);
+    }
+
+    updateProximityNoise() {
+        if (!this.entityManager || !this.proximityStatic) return;
+        const entities = this.entityManager.entities;
+        if (!entities || entities.length === 0) { this.proximityStatic.setIntensity(0); return; }
+        const level = this.level;
+        const playerPos = this.player?.getPosition() ?? this.playerPosRef;
+        // distância pelo corredor (BFS) — não atravessa paredes
+        const pathDistFor = (entity) => {
+            try {
+                if (!level || !level.worldToCell || !level.isSolidCell) return entity.distanceToPlayerXZ();
+                const eCell = level.worldToCell(entity.group.position.x, entity.group.position.z);
+                const pCell = level.worldToCell(playerPos.x, playerPos.z);
+                if (eCell.x === pCell.x && eCell.z === pCell.z) return entity.distanceToPlayerXZ();
+                // Se linha reta não bloqueada, usa euclidiana (mais barato e preciso)
+                if (!entity.lineBlocked || !entity.lineBlocked(entity.group.position, playerPos)) {
+                    return entity.distanceToPlayerXZ();
+                }
+                // BFS pelo grid para distância pelo corredor
+                const cols = level.cols, rows = level.rows;
+                const q = [{ x: eCell.x, z: eCell.z, d: 0 }];
+                const visited = new Set([`${eCell.x},${eCell.z}`]);
+                let head = 0;
+                while (head < q.length) {
+                    const cur = q[head++];
+                    if (cur.x === pCell.x && cur.z === pCell.z) {
+                        return cur.d * CONFIG.game.cellSize;
+                    }
+                    for (const [dx, dz] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+                        const nx = cur.x + dx, nz = cur.z + dz;
+                        const key = `${nx},${nz}`;
+                        if (nx < 0 || nz < 0 || nx >= cols || nz >= rows) continue;
+                        if (visited.has(key)) continue;
+                        if (level.isSolidCell(nx, nz)) continue;
+                        visited.add(key);
+                        q.push({ x: nx, z: nz, d: cur.d + 1 });
+                    }
+                    if (q.length > 400) break;
+                }
+                // sem caminho: penaliza (parede grossa)
+                return entity.distanceToPlayerXZ() * 2.2 + 12;
+            } catch { return entity.distanceToPlayerXZ(); }
+        };
+        let minDist = Infinity;
+        let maxObserve = 0;
+        for (const e of entities) {
+            const d = pathDistFor(e);
+            if (d < minDist) minDist = d;
+            if (e.observeRange > maxObserve) maxObserve = e.observeRange;
+        }
+        const maxDist = maxObserve || (9 * 3.5);
+        const minClose = 2.0;
+        let t = 0;
+        if (minDist >= maxDist) t = 0;
+        else if (minDist <= minClose) t = 1;
+        else t = (maxDist - minDist) / (maxDist - minClose);
+        t = Math.pow(Math.max(0, Math.min(1, t)), 1.35);
+        let isHunt = false;
+        let huntEntity = null;
+        try {
+            isHunt = entities.some(e => e.state === 'CHASING' || e.state === 'STALKING');
+            huntEntity = entities.find(e => e.state === 'CHASING' || e.state === 'STALKING');
+            if (isHunt) t = Math.min(1, t * 1.15 + 0.08);
+        } catch {}
+        if (entities.every(e => e.state === 'GONE' || e.state === 'IDLE_HIDDEN') && minDist > maxDist * 0.75) t *= 0.5;
+        if (minDist > maxDist * 0.9) t *= 0.25;
+        this.proximityStatic.setIntensity(t);
+        try { this.audio.setProximityIntensity(t); } catch {}
+        // chase layer: heartbeat + growl + ducking
+        try {
+            const wasHunt = this._wasHunt || false;
+            if (isHunt && t > 0.28) {
+                if (!wasHunt) {
+                    const pos = huntEntity ? huntEntity.group.position : playerPos;
+                    this.audio.playEntityGrowl(pos, t);
+                    this.audio.startHeartbeat();
+                    this.audio.duckBus('ambient', 0.62, 0.5);
+                }
+                this.audio.updateHeartbeatRate(t);
+                if (huntEntity && Math.random() < 0.07) this.audio.playEntityBreathAsset(huntEntity.group.position, t);
+            } else if (wasHunt && !isHunt) {
+                this.audio.stopHeartbeat(1.4);
+                this.audio.setBusVolume('ambient', 1, 1.2);
+            }
+            // vanish detect
+            for (const e of entities) {
+                const prev = e._prevStateForAudio || null;
+                if (e.state === 'VANISHING' && prev !== 'VANISHING') {
+                    this.audio.playEntityVanish(e.group.position);
+                }
+                e._prevStateForAudio = e.state;
+            }
+            this._wasHunt = isHunt;
+        } catch {}
     }
 
     onResize() {

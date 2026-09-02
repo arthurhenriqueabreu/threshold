@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Threshold — A Liminal Escape</title>
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect width='16' height='16' fill='%232d281a'/><rect x='4' y='4' width='8' height='8' fill='%23d8c26a'/></svg>" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/src/styles/main.css" />
   </head>
   <body>
@@ -76,7 +79,8 @@
               <li><span>MOUSE</span> olhar</li>
               <li><span>SHIFT</span> correr</li>
               <li><span>E</span> interagir</li>
-              <li><span>F</span> lanterna (dificuldade difícil)</li>
+              <li><span>F</span> lanterna</li>
+              <li><span>Q</span> celular (quando coletado)</li>
               <li><span>ESC</span> liberar cursor</li>
             </ul>
             <button id="btn-close-instructions" class="btn btn--secondary">VOLTAR</button>
@@ -111,6 +115,36 @@
         <div id="hud-phone" class="hidden">
           <p class="hud-phone-label">— TRANSMISSÃO —</p>
           <p id="hud-phone-text"></p>
+        </div>
+
+        <!-- Celular Nokia — direita, pixelado, toggle Q -->
+        <div id="nokia-phone" class="hidden">
+          <div class="nokia-shell">
+            <div class="nokia-brand">NOKIA</div>
+            <div class="lcd-screen" id="nokia-lcd">
+              <div class="click-zone left" id="zone-prev" title="Anterior"></div>
+              <div class="click-zone right" id="zone-next" title="Próximo"></div>
+              <div class="sidebar">
+                <div class="bars-container signal-bars"><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>
+                <div class="icon-antenna">Y</div>
+              </div>
+              <div class="content">
+                <div class="header"><div class="icon-mail"></div><span id="clock-display">00:00</span></div>
+                <div class="message-container"><div class="message-text" id="message-display">Carregando...</div></div>
+                <div class="nokia-hint">Q fecha • ◀ ▶ navega • F lanterna</div>
+              </div>
+              <div class="sidebar">
+                <div class="bars-container battery-bars"><div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div></div>
+                <div class="icon-battery"></div>
+              </div>
+            </div>
+            <div class="nokia-controls">
+              <button class="nokia-btn" id="btn-nokia-prev">◀</button>
+              <button class="nokia-btn nokia-btn--select" id="btn-nokia-select">●</button>
+              <button class="nokia-btn" id="btn-nokia-next">▶</button>
+            </div>
+            <div class="nokia-device-hint">CELULAR [Q] • LANTERNA [F]</div>
+          </div>
         </div>
 
         <div id="hud-legend" class="hidden">
@@ -159,17 +193,25 @@
         <button id="btn-restart" class="btn">JOGAR NOVAMENTE</button>
       </div>
 
-      <!-- Tela de fim de jogo (captura) -->
-      <div id="game-over-screen" class="screen hidden">
-        <h2 class="end-title">VOCÊ FOI CAPTURADO</h2>
-        <p class="end-sub">A anomalia alcançou você.</p>
-        <div class="end-stats">
-          <p>Jogador: <span id="go-player"></span></p>
-          <p>Pontuação: <span id="go-score"></span></p>
+      <!-- Tela de fim de jogo (captura) - chuvisco Slenderman -->
+      <div id="game-over-screen" class="screen hidden game-over-static">
+        <canvas id="static-canvas"></canvas>
+        <div class="static-vignette"></div>
+        <div class="static-scanlines"></div>
+        <div class="game-over-content">
+          <h2 class="end-title glitch" data-text="VOCÊ FOI CAPTURADO">VOCÊ FOI CAPTURADO</h2>
+          <p class="end-sub">A anomalia alcançou você.</p>
+          <div class="end-stats">
+            <p>Jogador: <span id="go-player"></span></p>
+            <p>Pontuação: <span id="go-score"></span></p>
+          </div>
+          <button id="btn-go-restart" class="btn">TENTAR NOVAMENTE</button>
+          <button id="btn-go-menu" class="btn btn--secondary">MENU</button>
         </div>
-        <button id="btn-go-restart" class="btn">TENTAR NOVAMENTE</button>
-        <button id="btn-go-menu" class="btn btn--secondary">MENU</button>
       </div>
+
+      <!-- Ruído de proximidade Slenderman (transparência por distância) -->
+      <canvas id="proximity-static"></canvas>
 
       <!-- Fade -->
       <div id="fade"></div>
