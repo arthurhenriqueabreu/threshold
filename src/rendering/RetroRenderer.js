@@ -152,7 +152,10 @@ export class RetroRenderer {
             // Sem esta atualização, uRetroRes permanece em (1, 1) no primeiro
             // caminho XR e o vertex snapping pode colapsar a geometria inteira.
             this._updateSharedUniforms(time);
-            this.renderer.setRenderTarget(null);
+            // O WebXRManager seleciona o framebuffer estéreo do headset antes
+            // de chamar o animation loop. Não altere o render target aqui:
+            // setRenderTarget(null) troca o framebuffer XR pelo canvas padrão
+            // e pode resultar em uma cena preta/parcial no headset/emulador.
             this.renderer.render(scene, camera);
             return;
         }
