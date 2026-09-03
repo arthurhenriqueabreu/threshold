@@ -149,3 +149,57 @@ export function createCeilingTexture(repeatX = 1, repeatY = 1) {
 
     return finalize(canvas, repeatX, repeatY);
 }
+
+export function createCrateTexture(repeatX = 1, repeatY = 1) {
+    const size = defaultSize();
+    const canvas = createCanvas(size);
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+    // Base madeira clara - distingue bem do carpete/parede
+    ctx.fillStyle = '#8a6d2e';
+    ctx.fillRect(0, 0, size, size);
+
+    // Tábuas horizontais (3 tábuas com vãos)
+    const plankCount = 3;
+    const gap = Math.max(2, Math.round(size / 32));
+    const plankH = Math.floor((size - gap * (plankCount + 1)) / plankCount);
+    for (let i = 0; i < plankCount; i++) {
+        const y = gap + i * (plankH + gap);
+        // Tábua principal
+        ctx.fillStyle = i % 2 === 0 ? '#9c7a32' : '#7a5e28';
+        ctx.fillRect(0, y, size, plankH);
+        // Veio da madeira - linha escura horizontal
+        ctx.fillStyle = 'rgba(60,45,18,0.35)';
+        ctx.fillRect(0, y + Math.floor(plankH * 0.45), size, Math.max(1, Math.round(size / 64)));
+        // Borda inferior da tábua (sombra do vão)
+        ctx.fillStyle = 'rgba(30,22,8,0.55)';
+        ctx.fillRect(0, y + plankH - Math.max(1, Math.round(size / 64)), size, Math.max(1, Math.round(size / 64)));
+    }
+
+    // Ripas verticais de reforço (2 laterais + 1 central)
+    ctx.fillStyle = '#6e5522';
+    const stripW = Math.max(3, Math.round(size / 16));
+    ctx.fillRect(0, 0, stripW, size);
+    ctx.fillRect(size - stripW, 0, stripW, size);
+    ctx.fillRect(Math.floor(size / 2 - stripW / 2), 0, stripW, size);
+
+    // Pregos - pontos escuros nas intersecções
+    ctx.fillStyle = '#2a1f0a';
+    const nailR = Math.max(1, Math.round(size / 64));
+    for (const sx of [stripW / 2, size / 2, size - stripW / 2]) {
+        for (let i = 0; i < plankCount; i++) {
+            const y = gap + i * (plankH + gap) + plankH / 2;
+            ctx.beginPath();
+            ctx.arc(Math.round(sx), Math.round(y - plankH * 0.15), nailR, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.arc(Math.round(sx), Math.round(y + plankH * 0.15), nailR, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    addBlockNoise(ctx, size, 22, 255, 3);
+    quantizeCanvas(ctx, size, 4);
+
+    return finalize(canvas, repeatX, repeatY);
+}

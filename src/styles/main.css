@@ -31,6 +31,17 @@ body {
     height: 100vh;
 }
 
+/* WebXR entry button created by Three.js VRButton. */
+#VRButton {
+    font-family: 'Courier New', Courier, monospace !important;
+    letter-spacing: 0.08em;
+    border: 1px solid var(--yellow-dim) !important;
+    border-radius: 0 !important;
+    background: rgba(13, 12, 8, 0.9) !important;
+    color: var(--text) !important;
+    z-index: 999 !important;
+}
+
 .hidden {
     display: none !important;
 }

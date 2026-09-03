@@ -153,7 +153,7 @@ export const CONFIG = {
         },
         hard: {
             name: 'DIFÍCIL',
-            description: 'Exige lanterna e celular (Q alterna lanterna); entidades agressivas',
+            description: 'Exige lanterna e celular (F alterna lanterna, Q celular); entidades agressivas',
             hasGuide: false,
             hasMinimap: false,
             hasEntities: true,

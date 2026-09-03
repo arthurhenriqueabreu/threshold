@@ -5,7 +5,8 @@ import { CONFIG } from '../core/Config.js';
 import {
     createWallTexture,
     createCarpetTexture,
-    createCeilingTexture
+    createCeilingTexture,
+    createCrateTexture
 } from './Textures.js';
 import { PickupItem } from '../interactions/PickupItem.js';
 import { Door } from '../interactions/Door.js';
@@ -227,7 +228,15 @@ export class Level0 extends Level {
 
     buildCrates() {
         const crateGeometry = new THREE.BoxGeometry(0.7, 0.7, 0.7);
-        const crateMaterial = new THREE.MeshLambertMaterial({ color: 0x5a4f32 });
+        const crateTexture = createCrateTexture(1, 1);
+        // Material iluminado: nunca fica preto puro mesmo longe de PointLight
+        // graças ao emissive + base clara; fog preto ainda aplica fade correto.
+        const crateMaterial = new THREE.MeshLambertMaterial({
+            map: crateTexture,
+            color: 0xffffff,
+            emissive: 0x2a1f0a,
+            emissiveIntensity: 0.35
+        });
         configureRetroMaterial(crateMaterial);
         const crates = new THREE.InstancedMesh(crateGeometry, crateMaterial, CRATE_PLACEMENTS.length);
         const matrix = new THREE.Matrix4();
@@ -849,10 +858,6 @@ export class Level0 extends Level {
                 return;
             }
         }
-        this.events?.sfx('distant');
-    }
-
-    playDistantSound() {
         this.events?.sfx('distant');
     }
 

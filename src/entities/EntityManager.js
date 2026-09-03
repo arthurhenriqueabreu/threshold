@@ -46,8 +46,21 @@ export class EntityManager {
             break;
         }
         if (!chosen) {
-            const w = this.level.cellToWorld(3, 3);
-            chosen = new THREE.Vector3(w.x, 0.015, w.z);
+            // Last resort: keep searching deterministically instead of using a
+            // hard-coded cell that is a wall in Level 1 and Level 2.
+            for (let r = 0; r < this.level.rows && !chosen; r++) {
+                for (let c = 0; c < this.level.cols && !chosen; c++) {
+                    if (this.level.grid[r][c] === '#' || !this.freeCell(c, r)) continue;
+                    const w = this.level.cellToWorld(c, r);
+                    if (this.level.isSolidAt(w.x + rVis, w.z) || this.level.isSolidAt(w.x - rVis, w.z) ||
+                        this.level.isSolidAt(w.x, w.z + rVis) || this.level.isSolidAt(w.x, w.z - rVis)) continue;
+                    chosen = new THREE.Vector3(w.x, 0.015, w.z);
+                }
+            }
+            if (!chosen) {
+                const w = this.level.cellToWorld(1, 1);
+                chosen = new THREE.Vector3(w.x, 0.015, w.z);
+            }
         }
         entity.group.position.copy(chosen);
         entity.group.visible = false;

@@ -143,6 +143,12 @@ export class RetroRenderer {
 
     // Renderiza a cena via render target low-res + post pass fullscreen.
     render(scene, camera, time) {
+        // The low-resolution post pass is mono and cannot be used as the XR
+        // framebuffer. Let WebGLRenderer render the native stereo views.
+        if (this.renderer.xr?.isPresenting) {
+            this.renderer.render(scene, camera);
+            return;
+        }
         if (!this.enabled) {
             this.renderer.render(scene, camera);
             return;

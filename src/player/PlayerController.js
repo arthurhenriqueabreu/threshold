@@ -7,6 +7,7 @@ export class PlayerController {
         this.yaw = 0;
         this.pitch = 0;
         this._dragging = false;
+        this.xrActive = false;
         this._lastX = 0;
         this._lastY = 0;
         this._onMouseMove = (e) => this.onMouseMove(e);
@@ -66,11 +67,24 @@ export class PlayerController {
         if (this.input.isActionActive('backward')) input.z += 1;
         if (this.input.isActionActive('left')) input.x -= 1;
         if (this.input.isActionActive('right')) input.x += 1;
+        const xrInput = this.input.getXRMoveInput?.();
+        if (xrInput) {
+            input.x += xrInput.x;
+            input.z += xrInput.z;
+        }
         return input;
     }
 
     isSprinting() {
-        return this.input.isActionActive('run');
+        return this.input.isActionActive('run') || this.input.isXRSprinting?.();
+    }
+
+    setXRActive(active) {
+        this.xrActive = !!active;
+    }
+
+    turnBy(angle) {
+        this.yaw += angle;
     }
 
     applyToCamera(position) {

@@ -23,6 +23,8 @@ import { clearRetroHandles } from '../rendering/RetroMaterial.js';
 import { StaticEffect } from '../ui/StaticEffect.js';
 import { ProximityStatic } from '../ui/ProximityStatic.js';
 import { NokiaPhone } from '../ui/NokiaPhone.js';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 
 const ITEM_ONLY_IDS = ['radar', 'phone', 'flashlight'];
 const PICKUP_MESSAGES = {
@@ -63,6 +65,9 @@ export class Game {
         this.staticEffect = new StaticEffect();
         this.proximityStatic = new ProximityStatic();
         this.nokiaPhone = null;
+        this.xrRig = null;
+        this.vrButton = null;
+        this.xrControllers = [];
     }
 
     init() {
@@ -90,6 +95,7 @@ export class Game {
             CONFIG.graphics.near,
             CONFIG.graphics.far
         );
+        this.setupXR();
 
         this.clock = new THREE.Clock();
 
@@ -111,9 +117,9 @@ export class Game {
         this.interactionSystem = new InteractionSystem(this.camera);
         this.interactionSystem.onPromptChange = (prompt) => this.hud.setPrompt(prompt);
         this.input.onInteract(() => {
-            if (this.gameState.state === 'PLAYING') {
-                this.interactionSystem.tryInteract();
-            }
+            if (this.gameState.state !== 'PLAYING') return;
+            if (this.nokiaPhone?.isOpen) return;
+            this.interactionSystem.tryInteract();
         });
         this.input.onKeyPress('KeyF', () => this.toggleFlashlight());
 
@@ -121,10 +127,33 @@ export class Game {
         this.nokiaPhone = new NokiaPhone({ input: this.input, gameState: this.gameState, audio: this.audio, camera: this.camera, scene: this.scene });
         // Toggle celular na direita com Q; quando aberto consome WASD/Arrows para navegação sem mover player
         this.input.onKeyPress('KeyQ', () => this.togglePhone());
-        this.input.onKeyPress('ArrowLeft', () => { if (this.nokiaPhone?.isOpen) this.nokiaPhone.navigate(-1); });
-        this.input.onKeyPress('ArrowRight', () => { if (this.nokiaPhone?.isOpen) this.nokiaPhone.navigate(1); });
-        this.input.onKeyPress('ArrowUp', () => { if (this.nokiaPhone?.isOpen) { this.nokiaPhone.navigate(-1); return; } });
-        this.input.onKeyPress('ArrowDown', () => { if (this.nokiaPhone?.isOpen) { this.nokiaPhone.navigate(1); return; } });
+        this.input.onKeyPress('ArrowLeft', () => {
+            if (!this.nokiaPhone?.isOpen) return false;
+            this.nokiaPhone.navigate(-1);
+            return true;
+        });
+        this.input.onKeyPress('ArrowRight', () => {
+            if (!this.nokiaPhone?.isOpen) return false;
+            this.nokiaPhone.navigate(1);
+            return true;
+        });
+        this.input.onKeyPress('ArrowUp', () => {
+            if (!this.nokiaPhone?.isOpen) return false;
+            this.nokiaPhone.navigate(-1);
+            return true;
+        });
+        this.input.onKeyPress('ArrowDown', () => {
+            if (!this.nokiaPhone?.isOpen) return false;
+            this.nokiaPhone.navigate(1);
+            return true;
+        });
+        this.input.onXRAction('flashlight', () => this.toggleFlashlight());
+        this.input.onXRAction('phone', () => this.togglePhone());
+        this.input.onXRAction('turn', (direction) => {
+            if (this.gameState.state === 'PLAYING' && !this.nokiaPhone?.isOpen) {
+                this.player?.controller.turnBy(direction * (Math.PI / 6));
+            }
+        });
         document.getElementById('item-phone')?.addEventListener('click', () => this.togglePhone());
         this.ui = new UIManager({
             onUiClick: () => this.audio.sfx('ui'),
@@ -147,7 +176,7 @@ export class Game {
 
         const tryLock = () => {
             if (this.gameState.state === 'PLAYING' && document.pointerLockElement === null && !this.transitioning) {
-                this.requestPointerLock();
+                if (!this.renderer.xr.isPresenting) this.requestPointerLock();
             }
         };
         // Clique no canvas ou em qualquer lugar durante PLAYING tenta travar
@@ -175,6 +204,66 @@ export class Game {
         this.showLoadingDone();
     }
 
+    setupXR() {
+        this.renderer.xr.enabled = true;
+        this.renderer.xr.setReferenceSpaceType('local-floor');
+
+        // The rig is the locomotion origin. WebXR keeps the headset pose on the
+        // camera while the game moves this group through the level.
+        this.xrRig = new THREE.Group();
+        this.xrRig.name = 'XRPlayerRig';
+        this.scene.add(this.xrRig);
+        this.xrRig.add(this.camera);
+
+        this.vrButton = VRButton.createButton(this.renderer, {
+            requiredFeatures: ['local-floor'],
+            optionalFeatures: ['bounded-floor']
+        });
+        this.vrButton.setAttribute('aria-label', 'Entrar em realidade virtual');
+        document.body.appendChild(this.vrButton);
+
+        const controllerModelFactory = new XRControllerModelFactory();
+        for (let index = 0; index < 2; index++) {
+            const controller = this.renderer.xr.getController(index);
+            this.input.registerXRController(controller);
+
+            const rayGeometry = new THREE.BufferGeometry().setFromPoints([
+                new THREE.Vector3(0, 0, 0),
+                new THREE.Vector3(0, 0, -1)
+            ]);
+            const ray = new THREE.Line(rayGeometry, new THREE.LineBasicMaterial({
+                color: 0xd8c26a,
+                transparent: true,
+                opacity: 0.35
+            }));
+            ray.name = 'xr-target-ray';
+            ray.scale.z = 4;
+            controller.add(ray);
+            this.scene.add(controller);
+
+            const grip = this.renderer.xr.getControllerGrip(index);
+            grip.add(controllerModelFactory.createControllerModel(grip));
+            this.scene.add(grip);
+            this.xrControllers.push({ controller, grip });
+        }
+
+        this.renderer.xr.addEventListener('sessionstart', () => this.onXRSessionChange(true));
+        this.renderer.xr.addEventListener('sessionend', () => this.onXRSessionChange(false));
+    }
+
+    onXRSessionChange(active) {
+        if (active) {
+            this.input.clearActions();
+            try { document.exitPointerLock(); } catch {}
+            this.player?.controller.setXRActive(true);
+            return;
+        }
+        this.input.clearActions();
+        if (this.nokiaPhone?.isOpen) this.nokiaPhone.close();
+        this.xrRig?.position.set(0, 0, 0);
+        this.player?.controller.setXRActive(false);
+    }
+
     showLoadingDone() {
         const loading = document.getElementById('loading');
         setTimeout(() => loading.classList.add('hidden'), 600);
@@ -185,16 +274,16 @@ export class Game {
             notify: (msg, opts) => this.notificationSystem.show(msg, opts),
             sfx: (name) => this.audio.sfx(name),
             sfxPositional: (name, pos, opts) => {
-                // tenta asset posicional se existir, senão fallback sfx
-                const map = { distant: 'distant' };
-                // para distant usamos playPositional se buffer existir, senão sfx global
+                // Usa HRTF quando há um buffer posicional; sons procedurais
+                // continuam com fallback global.
                 try {
-                    if (pos && this.audio.buffers && this.audio.buffers.size > 0) {
-                        // usa world bus com HRTF
-                        // distant não tem buffer dedicado, usa sfx normal
-                    }
-                } catch {}
-                this.audio.sfx(name);
+                    const played = pos ? this.audio.playPositional(name, pos, opts) : null;
+                    if (!played) this.audio.sfx(name);
+                    return played;
+                } catch {
+                    this.audio.sfx(name);
+                    return null;
+                }
             },
             onPowerRestored: () => {
                 this.objectiveManager.complete('power');
@@ -215,7 +304,7 @@ export class Game {
         this.hud.show();
         this.loadLevel();
         this.proximityStatic.start();
-        this.requestPointerLock();
+        if (!this.renderer.xr.isPresenting) this.requestPointerLock();
         try { this.audio.setReverbForLevel(this.levelIndex); } catch {}
         this.audio.startAmbient(this.diffConfig.flickerIntensity > 1 ? 1.3 : 1.0, this.levelIndex);
     }
@@ -230,7 +319,10 @@ export class Game {
             difficulty: this.difficulty
         });
 
-        this.player = new Player(this.camera, this.input, this.level);
+        this.player = new Player(this.camera, this.input, this.level, {
+            xrRig: this.xrRig,
+            isXRActive: () => this.renderer.xr.isPresenting
+        });
         this.player.spawnAt(this.level.spawnPoint.x, this.level.spawnPoint.z);
         this.level.setPlayerPosition(this.player.getPosition());
         this.level.onPortalEnter = () => this.handlePortalEnter();
@@ -343,7 +435,7 @@ export class Game {
             this.input.clearActions();
             document.exitPointerLock();
         } else if (wasOpen) {
-            this.requestPointerLock();
+            if (!this.renderer.xr.isPresenting) this.requestPointerLock();
         }
     }
 
@@ -360,7 +452,7 @@ export class Game {
         if (this.nokiaPhone?.isOpen) {
             // alternância: fecha celular e liga lanterna
             this.nokiaPhone.close();
-            this.requestPointerLock();
+            if (!this.renderer.xr.isPresenting) this.requestPointerLock();
         }
         if (this.gameState.state !== 'PLAYING' || !this.flashlight) {
             return;
@@ -425,6 +517,14 @@ export class Game {
         if (this.gameState.state !== 'PLAYING' || this.transitioning) {
             return;
         }
+        const missing = this.getMissingRequiredItems();
+        if (missing.length > 0) {
+            this.notificationSystem.show(`EQUIPAMENTO NECESSÁRIO\n${missing.join(' + ')}`, { warning: true });
+            this.audio.sfx('denied');
+            return;
+        }
+        // Each level has its own portal crossing, so use a unique score key.
+        this.gameState.addScore(`portal:${this.levelIndex}`, CONFIG.scoring.portal);
         this.transitioning = true;
         if (this.levelIndex >= CONFIG.levels.count - 1) {
             this.completePortalRun();
@@ -442,7 +542,7 @@ export class Game {
             this.ui.fadeOut(500);
             await this.endScreen.showLevelIntro({ title: nextName }, 2000);
             this.transitioning = false;
-            this.requestPointerLock();
+            if (!this.renderer.xr.isPresenting) this.requestPointerLock();
             this.updateItemUiFromState();
         });
     }
@@ -576,7 +676,17 @@ export class Game {
         }
     }
 
+    getMissingRequiredItems() {
+        if (!this.diffConfig) return [];
+        const required = [];
+        if (this.diffConfig.hasRadarRequirement && !this.gameState.hasItem('radar')) required.push('RADAR');
+        if (this.diffConfig.hasPhoneRequirement && !this.gameState.hasItem('phone')) required.push('CELULAR');
+        if (this.diffConfig.hasFlashlightRequirement && !this.gameState.hasItem('flashlight')) required.push('LANTERNA');
+        return required;
+    }
+
     onPointerLockChange() {
+        if (this.renderer?.xr?.isPresenting) return;
         // Se o lock foi adquirido, esconde pausa caso estivesse visível
         if (document.pointerLockElement !== null) {
             if (this.gameState.state === 'PAUSED') {
@@ -588,6 +698,8 @@ export class Game {
             }
             return;
         }
+        // Celular aberto libera o cursor intencionalmente — não pausar
+        if (this.nokiaPhone?.isOpen) return;
         // Evita pausar imediatamente após entrar em PLAYING (lock ainda não concedido)
         // - sem isso a câmera/minimapa parecem congelados no primeiro segundo
         if (document.pointerLockElement === null && this.gameState.state === 'PLAYING' && !this.transitioning) {
@@ -608,7 +720,7 @@ export class Game {
         this.gameState.setState('PLAYING');
         this._lastPlayStart = performance.now();
         try { this.audio.context?.resume?.(); } catch {}
-        this.requestPointerLock();
+        if (!this.renderer.xr.isPresenting) this.requestPointerLock();
     }
 
     restart() {
@@ -628,7 +740,7 @@ export class Game {
         this._lastPlayStart = performance.now();
         this.hud.show();
         this.loadLevel();
-        this.requestPointerLock();
+        if (!this.renderer.xr.isPresenting) this.requestPointerLock();
     }
 
     backToMenu() {
@@ -657,8 +769,9 @@ export class Game {
         const playing = this.gameState.state === 'PLAYING';
         if (playing) {
             this.gameState.elapsedSeconds += delta;
+            this.input.updateXR(delta);
             try {
-                this.player.update(delta, true);
+                this.player.update(delta, !this.nokiaPhone?.isOpen);
                 this.level.setPlayerPosition(this.player.getPosition());
             } catch (err) {
                 console.warn('[Game] player.update falhou', err);
@@ -694,8 +807,9 @@ export class Game {
             try { this.hud.updateMinimap(this.player.getPosition(), this.player.controller.yaw); } catch (err) { console.warn('[Game] minimap update falhou', err); }
             // passos do jogador -> sfx footstep por superfície
             try {
-                const moving = this.input?.actions && (this.input.actions.forward || this.input.actions.backward || this.input.actions.left || this.input.actions.right);
-                const sprint = this.input?.actions?.sprint;
+                const moving = ['forward', 'backward', 'left', 'right']
+                    .some((action) => this.input.isActionActive(action));
+                const sprint = this.input.isActionActive('run') || this.input.isXRSprinting();
                 const surface = this.level?.footstepSurface || 'carpet';
                 if (moving && this.gameState.state === 'PLAYING') this.audio.playFootstep(sprint, surface);
             } catch {}
