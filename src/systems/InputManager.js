@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+
 const KEY_ACTIONS = {
     KeyW: 'forward',
     ArrowUp: 'forward',
@@ -22,6 +24,21 @@ export class InputManager {
         this.xrMove = { x: 0, z: 0 };
         this.xrSprinting = false;
         this.xrTurnCooldown = 0;
+        // Arm-swing locomotion (mãos como pernas)
+        this._armSwing = {
+            enabled: true,
+            prevLeft: new THREE.Vector3(),
+            prevRight: new THREE.Vector3(),
+            tmpLeft: new THREE.Vector3(),
+            tmpRight: new THREE.Vector3(),
+            leftVel: new THREE.Vector3(),
+            rightVel: new THREE.Vector3(),
+            hasPrev: false,
+            avgSpeed: 0,
+            walkIntensity: 0
+        };
+        this._armSwingThresholdWalk = 0.45;
+        this._armSwingThresholdRun = 1.65;
         document.addEventListener('keydown', (e) => this.onKeyDown(e));
         document.addEventListener('keyup', (e) => this.onKeyUp(e));
     }
@@ -134,12 +151,71 @@ export class InputManager {
         this.xrSprinting = false;
         this.xrTurnCooldown = Math.max(0, this.xrTurnCooldown - delta);
 
+        // --- Arm-swing: calcula velocidade das mãos ---
+        let armForward = 0;
+        let armSprinting = false;
+        if (this._armSwing.enabled && delta > 0 && delta < 0.2) {
+            const leftCtrl = this.xrSources.left?.controller;
+            const rightCtrl = this.xrSources.right?.controller;
+            if (leftCtrl && rightCtrl) {
+                leftCtrl.getWorldPosition(this._armSwing.tmpLeft);
+                rightCtrl.getWorldPosition(this._armSwing.tmpRight);
+                if (!this._armSwing.hasPrev) {
+                    this._armSwing.prevLeft.copy(this._armSwing.tmpLeft);
+                    this._armSwing.prevRight.copy(this._armSwing.tmpRight);
+                    this._armSwing.hasPrev = true;
+                } else {
+                    // velocidade m/s
+                    this._armSwing.leftVel.subVectors(this._armSwing.tmpLeft, this._armSwing.prevLeft).divideScalar(delta);
+                    this._armSwing.rightVel.subVectors(this._armSwing.tmpRight, this._armSwing.prevRight).divideScalar(delta);
+                    const lSpeed = this._armSwing.leftVel.length();
+                    const rSpeed = this._armSwing.rightVel.length();
+                    // média com decaimento
+                    const instantAvg = (lSpeed + rSpeed) * 0.5;
+                    // suavização exponencial
+                    this._armSwing.avgSpeed = this._armSwing.avgSpeed * 0.82 + instantAvg * 0.18;
+                    // detecta braços alternados: velocidades em Z opostas indicam caminhada natural
+                    const zOpposite = this._armSwing.leftVel.z * this._armSwing.rightVel.z < 0;
+                    const bothMoving = lSpeed > 0.25 && rSpeed > 0.25;
+                    const swingFactor = (zOpposite && bothMoving) ? 1.18 : 0.72;
+                    const effective = this._armSwing.avgSpeed * swingFactor;
+                    if (effective > this._armSwingThresholdWalk) {
+                        // mapeia 0.45→0 até 2.2→1
+                        const t = Math.min(1, (effective - this._armSwingThresholdWalk) / 1.55);
+                        armForward = t; // 0..1
+                        // curva mais agressiva para corrida
+                        if (effective > this._armSwingThresholdRun) {
+                            armSprinting = true;
+                            armForward = Math.min(1.35, armForward * 1.35);
+                        }
+                    }
+                    this._armSwing.walkIntensity = armForward;
+                    // atualiza prev
+                    this._armSwing.prevLeft.copy(this._armSwing.tmpLeft);
+                    this._armSwing.prevRight.copy(this._armSwing.tmpRight);
+                }
+            } else {
+                this._armSwing.hasPrev = false;
+                this._armSwing.avgSpeed *= 0.92;
+            }
+        } else if (!this._armSwing.enabled) {
+            this._armSwing.hasPrev = false;
+        }
+
+        // Thumbstick ainda funciona como fallback, mas arm-swing tem prioridade quando detecta caminhada
         const leftStick = this.readXRStick(this.xrSources.left);
-        this.xrMove.x = leftStick.x;
-        this.xrMove.z = leftStick.y;
-        const leftSqueeze = this.pollXRButton('left', 1, 'sprint');
-        const rightSqueeze = this.pollXRButton('right', 1, 'sprint');
-        this.xrSprinting = leftSqueeze || rightSqueeze;
+        if (armForward > 0.08) {
+            // mãos comandam frente/ trás; thumbstick mantém strafe lateral
+            this.xrMove.x = leftStick.x * 0.55;
+            this.xrMove.z = -armForward;
+            this.xrSprinting = armSprinting;
+        } else {
+            this.xrMove.x = leftStick.x;
+            this.xrMove.z = leftStick.y;
+            const leftSqueeze = this.pollXRButton('left', 1, 'sprint');
+            const rightSqueeze = this.pollXRButton('right', 1, 'sprint');
+            this.xrSprinting = leftSqueeze || rightSqueeze || armSprinting;
+        }
         this.pollXRButton('left', 4, 'flashlight'); // X on Quest
         this.pollXRButton('right', 4, 'phone');     // A on Quest
 

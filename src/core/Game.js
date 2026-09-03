@@ -206,6 +206,7 @@ export class Game {
 
     setupXR() {
         this.renderer.xr.enabled = true;
+        this.renderer.xr.cameraAutoUpdate = true;
         this.renderer.xr.setReferenceSpaceType('local-floor');
 
         // The rig is the locomotion origin. WebXR keeps the headset pose on the
@@ -220,7 +221,11 @@ export class Game {
             optionalFeatures: ['bounded-floor']
         });
         this.vrButton.setAttribute('aria-label', 'Entrar em realidade virtual');
+        // Menu não é visível em headset: só mostra VR após iniciar jogo
+        this.vrButton.style.display = 'none';
         document.body.appendChild(this.vrButton);
+        // Overlay 3D simples para pausa/menu em VR (DOM não aparece no headset)
+        this._vrMenuGroup = null;
 
         const controllerModelFactory = new XRControllerModelFactory();
         for (let index = 0; index < 2; index++) {
@@ -251,17 +256,110 @@ export class Game {
         this.renderer.xr.addEventListener('sessionend', () => this.onXRSessionChange(false));
     }
 
+    _ensureVRMenu() {
+        if (this._vrMenuGroup) return this._vrMenuGroup;
+        const group = new THREE.Group();
+        group.name = 'VRMenu';
+        const canvas = document.createElement('canvas');
+        canvas.width = 1024;
+        canvas.height = 512;
+        const ctx = canvas.getContext('2d');
+        const tex = new THREE.CanvasTexture(canvas);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.minFilter = THREE.LinearFilter;
+        tex.magFilter = THREE.LinearFilter;
+        const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide });
+        const geo = new THREE.PlaneGeometry(1.6, 0.8);
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.name = 'VRMenuPlane';
+        group.add(mesh);
+        group.visible = false;
+        // head-locked: filho da câmera para sempre à frente do headset
+        const anchor = this.camera || this.xrRig;
+        anchor?.add(group);
+        // à frente dos olhos, levemente abaixo
+        group.position.set(0, -0.12, -1.65);
+        // canvas helper
+        group.userData.canvas = canvas;
+        group.userData.ctx = ctx;
+        group.userData.tex = tex;
+        group.userData.mesh = mesh;
+        this._vrMenuGroup = group;
+        return group;
+    }
+
+    _updateVRMenu(text) {
+        const g = this._ensureVRMenu();
+        if (!g) return;
+        const ctx = g.userData.ctx;
+        const canvas = g.userData.canvas;
+        const tex = g.userData.tex;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // fundo
+        ctx.fillStyle = 'rgba(12,10,8,0.92)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = '#d8c26a';
+        ctx.lineWidth = 6;
+        ctx.strokeRect(8, 8, canvas.width - 16, canvas.height - 16);
+        ctx.fillStyle = '#d8c26a';
+        ctx.font = 'bold 54px VT323, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('THRESHOLD', canvas.width / 2, 84);
+        ctx.fillStyle = '#fff4d6';
+        ctx.font = '28px VT323, monospace';
+        const lines = (text || '').split('\n');
+        let y = 148;
+        for (const line of lines) {
+            ctx.fillText(line, canvas.width / 2, y);
+            y += 36;
+        }
+        ctx.fillStyle = 'rgba(216,194,106,0.95)';
+        ctx.font = '22px VT323, monospace';
+        ctx.fillText('Mova as mãos como caminhada • Rápido = correr • Stick esq. strafe • Stick dir. girar', canvas.width / 2, canvas.height - 38);
+        tex.needsUpdate = true;
+    }
+
+    _setVRMenuVisible(visible, text) {
+        const g = this._ensureVRMenu();
+        if (!g) return;
+        if (visible) this._updateVRMenu(text);
+        g.visible = visible;
+    }
+
     onXRSessionChange(active) {
+        this.retroRenderer.setVRMode(active);
         if (active) {
             this.input.clearActions();
             try { document.exitPointerLock(); } catch {}
             this.player?.controller.setXRActive(true);
+            // Sincroniza rig na posição real do jogador (spawn foi com isPresenting false → rig 0,0)
+            if (this.player) {
+                const p = this.player.getPosition();
+                this.xrRig.position.set(p.x, 0, p.z);
+            }
+            if (this.gameState.state === 'MENU') {
+                this._setVRMenuVisible(true, 'THRESHOLD — A LIMINAL ESCAPE\n\nVocê entrou em VR no MENU\n\nSAIA DO VR (botão superior)\nInicie no monitor: nome + dificuldade\nDepois entre em VR novamente');
+            } else if (this.gameState.state === 'PAUSED') {
+                this._setVRMenuVisible(true, 'PAUSADO\n\nGatilho = interagir [E]\nX = lanterna  A = celular\nMova mãos para andar');
+            } else if (this.gameState.state === 'PLAYING') {
+                this._setVRMenuVisible(false, '');
+                // hint breve ao entrar
+                setTimeout(() => this._setVRMenuVisible(false, ''), 50);
+            }
+            // reseta arm-swing
+            if (this.input._armSwing) {
+                this.input._armSwing.hasPrev = false;
+                this.input._armSwing.avgSpeed = 0;
+            }
             return;
         }
         this.input.clearActions();
         if (this.nokiaPhone?.isOpen) this.nokiaPhone.close();
+        this._setVRMenuVisible(false, '');
         this.xrRig?.position.set(0, 0, 0);
         this.player?.controller.setXRActive(false);
+        // volta a esconder botão se voltou ao menu
+        if (this.gameState.state !== 'PLAYING') this.vrButton.style.display = 'none';
     }
 
     showLoadingDone() {
@@ -302,11 +400,17 @@ export class Game {
         this.mainMenu.hide();
         this.hud.setDifficulty(difficulty);
         this.hud.show();
+        // VR: menu DOM não aparece no headset, libera botão VR agora
+        this.vrButton.style.display = '';
         this.loadLevel();
         this.proximityStatic.start();
         if (!this.renderer.xr.isPresenting) this.requestPointerLock();
         try { this.audio.setReverbForLevel(this.levelIndex); } catch {}
         this.audio.startAmbient(this.diffConfig.flickerIntensity > 1 ? 1.3 : 1.0, this.levelIndex);
+        if (this.renderer.xr.isPresenting && this.player) {
+            const p = this.player.getPosition();
+            this.xrRig.position.set(p.x, 0, p.z);
+        }
     }
 
     loadLevel(index = this.gameState.currentLevelIndex) {
@@ -686,7 +790,10 @@ export class Game {
     }
 
     onPointerLockChange() {
-        if (this.renderer?.xr?.isPresenting) return;
+        if (this.renderer?.xr?.isPresenting) {
+            // em VR o pause 3D já foi tratado em pause()/resume()
+            return;
+        }
         // Se o lock foi adquirido, esconde pausa caso estivesse visível
         if (document.pointerLockElement !== null) {
             if (this.gameState.state === 'PAUSED') {
@@ -712,7 +819,11 @@ export class Game {
     pause() {
         this.gameState.setState('PAUSED');
         this.input.clearActions();
-        this.ui.showPause();
+        if (this.renderer.xr.isPresenting) {
+            this._setVRMenuVisible(true, 'PAUSADO\n\nGatilho = interagir [E]\nX = lanterna  A = celular\nMova mãos para andar');
+        } else {
+            this.ui.showPause();
+        }
         try { this.audio.context?.suspend?.(); } catch {}
     }
 
@@ -720,7 +831,11 @@ export class Game {
         this.gameState.setState('PLAYING');
         this._lastPlayStart = performance.now();
         try { this.audio.context?.resume?.(); } catch {}
-        if (!this.renderer.xr.isPresenting) this.requestPointerLock();
+        if (this.renderer.xr.isPresenting) {
+            this._setVRMenuVisible(false, '');
+        } else {
+            if (!this.renderer.xr.isPresenting) this.requestPointerLock();
+        }
     }
 
     restart() {

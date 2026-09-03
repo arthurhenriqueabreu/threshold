@@ -15,7 +15,8 @@ import { getAllRetroHandles, collectRetroUniforms } from './RetroMaterial.js';
 export class RetroRenderer {
     constructor(renderer, retroConfig = CONFIG.retro) {
         this.renderer = renderer;
-        this.enabled = retroConfig.enabled;
+        this.baseEnabled = retroConfig.enabled;
+        this.enabled = this.baseEnabled;
         this.style = new RetroStyle(retroConfig);
         this.isVRMode = false; // preparação futura para preset vr-safe
 
@@ -114,14 +115,15 @@ export class RetroRenderer {
         this.renderer.setPixelRatio(ratio);
     }
 
-    // Anulação básica de VR (futuro) — desativa o que seria desconfortável.
+    // Ajusta o pipeline para VR: o framebuffer XR continua nativo/stereo e os
+    // efeitos de snap são suavizados para não introduzir desconforto visual.
     setVRMode(on) {
         this.isVRMode = on;
         const vr = CONFIG.retro.vrSafe;
         if (on) {
-            // Ainda desligamos a render low-res, snap e affine fracos.
-            // (para ser ativado quando houver WebXR)
             this.enabled = !vr.internalLowRes;
+        } else {
+            this.enabled = this.baseEnabled;
         }
     }
 
@@ -146,6 +148,11 @@ export class RetroRenderer {
         // The low-resolution post pass is mono and cannot be used as the XR
         // framebuffer. Let WebGLRenderer render the native stereo views.
         if (this.renderer.xr?.isPresenting) {
+            // Materiais retro são registrados depois do primeiro setSize().
+            // Sem esta atualização, uRetroRes permanece em (1, 1) no primeiro
+            // caminho XR e o vertex snapping pode colapsar a geometria inteira.
+            this._updateSharedUniforms(time);
+            this.renderer.setRenderTarget(null);
             this.renderer.render(scene, camera);
             return;
         }
@@ -181,6 +188,12 @@ export class RetroRenderer {
                     break;
                 case 'snapJitter':
                     u.value = jitter;
+                    break;
+                case 'snapStrength':
+                    u.value = this.isVRMode ? CONFIG.retro.vrSafe.vertexSnapStrength : CONFIG.retro.vertexSnapStrength;
+                    break;
+                case 'affineStrength':
+                    u.value = this.isVRMode ? CONFIG.retro.vrSafe.affineStrength : CONFIG.retro.affineStrength;
                     break;
                 default:
                     break;
