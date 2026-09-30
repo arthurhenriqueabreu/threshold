@@ -61,14 +61,64 @@ node scripts/validate-map.mjs
 
 ### WebXR / Meta Quest
 
-O jogo inclui um botão `ENTER VR` criado pelo Three.js. Para testar no navegador:
+O jogo usa o botão *ENTER VR* do Three.js como entrada única da sessão. Para
+testar no desktop:
 
 1. Execute `npm run dev` e abra o endereço local no Chrome ou Edge.
-2. Inicie uma partida no modo desktop.
-3. Clique em `ENTER VR` para entrar no headset ou no emulador WebXR.
-4. Em um Meta Quest, abra o endereço pelo Meta Quest Browser. Em desktop, use uma extensão de emulação WebXR compatível com controladores Quest.
+2. Clique em `ENTER VR` no menu ou durante uma partida.
+3. No desktop, use uma extensão de emulação WebXR compatível com controladores Quest.
 
-Controles VR: joystick esquerdo move, joystick direito faz snap-turn, gatilho interage, grip corre, `X` alterna a lanterna e `A` abre/fecha o celular.
+Para testar em um Meta Quest, o headset não pode usar o `localhost` do PC:
+
+1. Sirva o projeto em uma interface acessível pela rede, por exemplo
+   `npm run dev -- --host 0.0.0.0`.
+2. Abra no Quest o IP do computador na mesma rede, e não `localhost`.
+3. Use HTTPS (certificado local confiável ou um túnel HTTPS); WebXR imersivo
+   não deve ser testado via HTTP usando apenas o IP da rede.
+
+Controles VR: stick esquerdo move/strafa, stick direito faz snap-turn, um grip
+anda para frente, os dois grips fazem sprint gradual, gatilho interage, `X`
+alterna a lanterna, `A` abre/fecha o celular e `B/Y` pausa ou retoma.
+No room-scale, a colisão considera também o deslocamento físico do headset;
+a lanterna usa a pose real do controle direito.
+
+## VR Comfort
+
+Opções de conforto para a sessão WebXR (menu VR → **[ CONFORTO VR ]**,
+também acessível no pause). Aplicadas na hora, sem reiniciar. O conforto
+varia entre indivíduos — estes são pontos iniciais de playtest, sem
+garantia de zero desconforto.
+
+- **Perfis**: CONFORTO (1.7/2.7 m/s, vignette forte, efeitos reduzidos) ·
+  PADRÃO (default, 2.2/3.4 m/s) · INTENSO (2.6/4.0 m/s, sem vignette).
+  Salvo em `localStorage` (`threshold_vrComfortProfile`).
+- **Locomoção**: contínua com aceleração/desaceleração progressiva
+  (magnitude analógica do stick/grip preservada, sprint gradual) ou
+  **BLINK STEP** opcional (salto de ~1m por aperto de grip, com cooldown
+  e collision — nunca atravessa paredes).
+- **Snap turn** 30° (default) ou 45°; sem smooth turn por padrão.
+- **Vignette de conforto**: escurece só a periferia conforme a velocidade
+  real, com transição suave; bônus pequeno durante chase.
+- **Efeitos XR reduzidos**: proximidade vira vignette + grain lento
+  (sem glitch bars contínuas, scanlines rápidas ou flashes); static forte
+  só na captura (~0.6s → fade). Flicker vira falha de fluorescente suave
+  com escala por perfil. Affine mapping e vertex snapping desligados no XR.
+- **Render PS1 XR-safe**: nearest filtering, flat shading, fog e uma paleta de
+  cor quantizada de forma suave e igual nos dois olhos;
+  vertex snapping/UV afim, postprocess mono e dither de tela ficam desligados
+  no headset; head tracking sempre 1:1 (terror vai para mundo/áudio/luz,
+  nunca para a câmera).
+  No desktop, o vertex snapping também fica desligado porque o shader de
+  posição podia colapsar o render target em alguns caminhos WebGL; o look
+  continua vindo de low-res, nearest, flat shading, affine UV e quantização.
+- **Performance = conforto**: monitor de frame time com qualidade
+  adaptativa só de cosméticos (partículas do portal, efeitos, HUD).
+- **Pausas naturais**: portais mostram o próximo nível e aguardam seu
+  input; o pause exibe o tempo de sessão e sugere pausa se houver desconforto.
+
+Testes lógicos: `npm run test:movement`, `npm run test:comfort`,
+`npm run test:xr`. Roteiro de playtest com Quest 3 em
+`docs/VR-COMFORT-PLAYTEST.md` (avaliação externa pode usar SSQ/VRSQ).
 
 ## Como jogar
 

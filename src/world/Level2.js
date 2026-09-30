@@ -11,6 +11,19 @@ import { PickupItem } from '../interactions/PickupItem.js';
 import { Portal } from '../interactions/Portal.js';
 import { Interactable } from '../interactions/Interactable.js';
 import { configureRetroMaterial } from '../rendering/RetroMaterial.js';
+import {
+    placeProp,
+    placeWallProp,
+    placePropAgainstWall,
+    createSofaProp,
+    createTableProp,
+    createFilingCabinetProp,
+    createOldComputerProp,
+    createCrateProp,
+    createTrashBagsProp,
+    createLanternProp,
+    createCameraProp
+} from './Props.js';
 
 const MAP = [
     '###################',
@@ -71,6 +84,7 @@ class Stabilizer extends Interactable {
         this.events.notify('DISPOSITIVO ESTABILIZADO');
         this.events.sfx('power');
         this.gameState.completeObjective('stabilize');
+        this.gameState.addScore('stabilize', CONFIG.scoring.stabilize ?? 0);
         this.onStabilized();
     }
 
@@ -100,11 +114,15 @@ export class Level2 extends Level {
             { id: 'fragment', title: 'Coletar o FRAGMENTO' },
             { id: 'stabilize', title: 'Estabilizar o DISPOSITIVO' }
         ];
+        if (this.diffConfig.hasFlashlightRequirement) {
+            this.objectives.unshift({ id: 'flashlight', title: 'Encontrar a LANTERNA' });
+        }
 
         this.buildEnvironment();
         this.buildLights();
         this.buildPortalStructure();
         this.buildGameplay();
+        this.buildDecor();
 
         const spawnCell = this.findCell('S');
         if (spawnCell) {
@@ -288,6 +306,32 @@ export class Level2 extends Level {
     buildGameplay() {
         this.buildFragment();
         this.buildStabilizer();
+        if (this.diffConfig.hasFlashlightRequirement) {
+            const flashlightWorld = this.cellToWorld(15, 1);
+            const flashlight = new PickupItem(this.createFlashlightMesh(), {
+                id: 'flashlight',
+                prompt: '[E] Pegar lanterna'
+            });
+            flashlight.meshes[0].position.set(flashlightWorld.x, 0.9, flashlightWorld.z);
+            flashlight.baseY = 0.9;
+            this.group.add(flashlight.meshes[0]);
+            this.addInteractable(flashlight);
+            this.pickups.push({ item: flashlight, id: 'flashlight' });
+        }
+    }
+
+    createFlashlightMesh() {
+        const group = new THREE.Group();
+        const color = 0xffdd66;
+        const bodyMaterial = new THREE.MeshLambertMaterial({ color, emissive: color });
+        configureRetroMaterial(bodyMaterial);
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 0.42, 8), bodyMaterial);
+        body.rotation.z = Math.PI / 2;
+        const halo = new THREE.Mesh(new THREE.OctahedronGeometry(0.34), new THREE.MeshBasicMaterial({
+            color, transparent: true, opacity: 0.3, side: THREE.DoubleSide
+        }));
+        group.add(body, halo);
+        return group;
     }
 
     buildFragment() {
@@ -386,4 +430,21 @@ export class Level2 extends Level {
     refreshInteractionStates() {}
 
     updateAmbientEvents(delta, time) {}
+
+    // Objetos de ambientação: tema mais doméstico/administrativo, tom
+    // anômalo. Sem carro abandonado aqui — esse mapa não tem uma área
+    // externa clara (só corredores/salas fechadas), então a peça não
+    // se encaixaria de forma coerente.
+    buildDecor() {
+        placePropAgainstWall(this, createSofaProp, 13, 2);
+        placePropAgainstWall(this, createTableProp, 6, 4);
+        placePropAgainstWall(this, createFilingCabinetProp, 15, 4);
+        placePropAgainstWall(this, createOldComputerProp, 5, 9);
+        placePropAgainstWall(this, createCrateProp, 12, 9);
+        placePropAgainstWall(this, createTrashBagsProp, 6, 12);
+        placePropAgainstWall(this, createLanternProp, 14, 13);
+
+        const p = this.cellToWorld(9, 1);
+        placeWallProp(this, createCameraProp, p.x, 2.15, p.z + this.cellSize / 2 - 0.08, Math.PI);
+    }
 }

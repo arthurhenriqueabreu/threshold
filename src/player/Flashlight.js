@@ -23,12 +23,33 @@ export class Flashlight {
     toggle() {
         this.on = !this.on;
         this.light.intensity = this.on ? 38 : 0;
-        if (this.on) {
-            this.camera.add(this.group);
-        } else {
-            this.camera.remove(this.group);
-        }
+        this._attachCurrent();
         return this.on;
+    }
+
+    // XR: spotlight segue o controller direito (-Z). Desktop: câmera.
+    setXRController(controller) {
+        this.xrController = controller || null;
+        if (this.on) this._attachCurrent();
+    }
+
+    _attachCurrent() {
+        const host = this.xrController ?? this.camera;
+        if (!host) return;
+        if (this.on) {
+            if (this.group.parent !== host) {
+                this.group.parent?.remove(this.group);
+                host.add(this.group);
+            }
+            const isXR = host === this.xrController;
+            // Camera.position já está na altura dos olhos. No controle, o
+            // pose local é a própria mão; manter Y=1.55 colocava o facho
+            // muito acima do Quest controller e fazia a luz parecer deslocada.
+            this.light.position.set(0, isXR ? -0.03 : 0, isXR ? -0.04 : 0);
+            this.target.position.set(0, 0, -4);
+        } else {
+            this.group.parent?.remove(this.group);
+        }
     }
 
     isOn() {
@@ -58,13 +79,16 @@ export class Flashlight {
         this.light.distance = 40 + Math.sin(time * 0.55) * 3.2 + Math.sin(time * 1.7) * 1.0;
         this.light.angle = 0.60 + Math.sin(time * 0.68) * 0.035;
         this.light.penumbra = 0.35 + Math.sin(time * 1.2) * 0.04;
-        // leve balanço da posição para não ficar estático
-        this.light.position.set(sway, 1.55 + bob, 0);
+        // leve balanço da posição para não ficar estático. A pose base é
+        // local ao host: câmera (desktop) ou controle direito (XR).
+        const isXR = this.xrController && this.group.parent === this.xrController;
+        this.light.position.set(sway, (isXR ? -0.03 : 0) + bob, isXR ? -0.04 : 0);
         this.target.position.set(sway * 0.5, bob * 0.3, -4);
     }
 
     dispose() {
-        this.camera.remove(this.group);
+        this.group.parent?.remove(this.group);
+        this.xrController = null;
         if (this.light) {
             this.light.dispose();
         }

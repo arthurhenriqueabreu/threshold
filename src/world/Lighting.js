@@ -6,12 +6,21 @@ export class FlickeringLight {
         this.light = light;
         this.baseIntensity = light.intensity;
         this.intensityMult = intensityMult;
+        // Comfort mitigation: escala XR (profile.flickerScale) aplicada só
+        // quando a sessão immersive-vr está ativa. Desktop continua igual.
+        this.xrScale = 1;
+        this.xrActive = false;
         this.nextFlicker = this.randomInterval();
         this.flickerTimer = 0;
         this.active = false;
         this.flickerDuration = 0;
         this.forcedFlicker = false;
         this.forcedTimer = 0;
+    }
+
+    setXRScale(scale, active) {
+        this.xrScale = scale ?? 1;
+        this.xrActive = !!active;
     }
 
     randomInterval() {
@@ -26,15 +35,38 @@ export class FlickeringLight {
         this.elapsed = 0;
     }
 
+    // Envelope suave de "falha de fluorescente": normal → queda →
+    // breve recuperação → queda menor → normal. Sem alternância
+    // 100%/5%/90% em frames sucessivos (evita estímulo frenético em XR).
+    _envelope(t) {
+        // t: 0..1 ao longo do flicker forçado
+        const dip1 = 1 - 0.75 * this._smoothPulse(t, 0.08, 0.30);
+        const recover = 1 - 0.25 * this._smoothPulse(t, 0.42, 0.58);
+        const dip2 = 1 - 0.45 * this._smoothPulse(t, 0.62, 0.85);
+        return Math.max(0.12, dip1 * recover * dip2);
+    }
+
+    _smoothPulse(t, a, b) {
+        // Pulso suave 0→1→0 centrado em [a,b] (smoothstep nas bordas).
+        if (t <= a || t >= b) return 0;
+        const x = (t - a) / (b - a);
+        return Math.sin(x * Math.PI);
+    }
+
     update(delta) {
         this.flickerTimer += delta;
+        const scale = this.xrActive ? this.xrScale : 1;
 
         if (this.forcedFlicker) {
             this.forcedTimer -= delta;
             this.elapsed += delta;
-            if (Math.random() > 0.3) {
-                this.light.intensity = this.baseIntensity * (0.05 + Math.random() * 0.9);
-            }
+            const total = Math.max(0.001, this.flickerDuration);
+            const t = Math.min(1, this.elapsed / total);
+            const env = this._envelope(t);
+            // Em XR o jitter residual é quase nulo; no desktop mantém textura.
+            const jitterAmp = this.xrActive ? 0.06 * scale : 0.25;
+            const jitter = 1 + (Math.random() - 0.5) * 2 * jitterAmp;
+            this.light.intensity = this.baseIntensity * env * jitter;
             if (this.forcedTimer <= 0) {
                 this.forcedFlicker = false;
                 this.active = false;
@@ -53,7 +85,15 @@ export class FlickeringLight {
 
         if (this.active) {
             this.elapsed += delta;
-            if (Math.random() > 0.5) {
+            if (this.xrActive) {
+                // XR: pulsos mais lentos — falha de fluorescente natural.
+                // effectiveFlicker = base * scale (comfort 0.45 / standard
+                // 0.65 / intense 1.0); a profundidade da queda é atenuada.
+                const total = Math.max(0.001, this.flickerDuration);
+                const t = Math.min(1, this.elapsed / total);
+                const env = this._envelope(t);
+                this.light.intensity = this.baseIntensity * (1 - (1 - env) * scale);
+            } else if (Math.random() > 0.5) {
                 this.light.intensity = this.baseIntensity * (0.1 + Math.random() * 0.85);
             }
             if (this.elapsed >= this.flickerDuration) {
@@ -120,6 +160,14 @@ export class Lighting {
         }
         for (const flickering of this.flickeringLights) {
             flickering.baseIntensity *= boost;
+        }
+    }
+
+    // Comfort mitigation: aplica flickerScale do profile ativo quando em XR.
+    // Chamado pelo Game a cada troca de profile/session (tempo real, sem restart).
+    setXRComfort(flickerScale, xrActive) {
+        for (const flickering of this.flickeringLights) {
+            flickering.setXRScale(flickerScale ?? 1, xrActive);
         }
     }
 

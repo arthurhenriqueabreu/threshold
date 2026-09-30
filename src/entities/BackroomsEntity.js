@@ -371,8 +371,8 @@ export class BackroomsEntity {
             if (this._bones && this._bones['hips']?.rotation) {
                 this._slenderReady = true;
             } else {
-                console.warn('[BackroomsEntity] modelo sem bones válidos, mantendo fallback');
-                // mantém fallback invisível mas não quebra
+                // O modo sólido (USE_BONES=false) usa OBJ estático de
+                // propósito; ausência de skeleton não é uma falha de carga.
                 this._bones = null;
                 this._slenderReady = false;
             }

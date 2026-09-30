@@ -13,6 +13,19 @@ import { Door } from '../interactions/Door.js';
 import { FuseBox } from '../interactions/FuseBox.js';
 import { Portal } from '../interactions/Portal.js';
 import { MAP, POINT_LIGHT_CELLS, FLICKER_INDICES, SUPPORT_ITEM_CELLS } from './MapData.js';
+import {
+    placeProp,
+    placeWallProp,
+    placePropAgainstWall,
+    createFilingCabinetProp,
+    createTableProp,
+    createTrashBagsProp,
+    createLanternProp,
+    createCameraProp,
+    createExtinguisherProp,
+    createOldComputerProp,
+    createCartProp
+} from './Props.js';
 import { configureRetroMaterial } from '../rendering/RetroMaterial.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 
@@ -53,6 +66,16 @@ export class Level0 extends Level {
         this.portal = null;
         this.guideMarkers = [];
         this.ambientEventTimer = 0;
+        // objetivos padrão do nível 0
+        this.objectives = [
+            { id: 'fuse', title: 'Encontrar o FUSÍVEL' },
+            { id: 'keycard', title: 'Encontrar o CARTÃO' },
+            { id: 'power', title: 'Restaurar a ENERGIA' }
+        ];
+        // adicionar itens de suporte como objetivos quando exigidos
+        if (this.diffConfig.hasRadarRequirement) this.objectives.unshift({ id: 'radar', title: 'Encontrar o RADAR' });
+        if (this.diffConfig.hasPhoneRequirement) this.objectives.unshift({ id: 'phone', title: 'Encontrar o CELULAR' });
+        if (this.diffConfig.hasFlashlightRequirement) this.objectives.unshift({ id: 'flashlight', title: 'Encontrar a LANTERNA' });
 
         this.buildEnvironment();
         this.buildLights();
@@ -62,6 +85,9 @@ export class Level0 extends Level {
         if (spawnCell) {
             this.spawnPoint.copy(this.cellToWorld(spawnCell.col, spawnCell.row));
             this.spawnPoint.y = CONFIG.player.height;
+            // A célula inicial fica no canto noroeste; o norte é parede.
+            // Começar voltado para leste revela o corredor imediatamente.
+            this.spawnYaw = -Math.PI / 2;
         }
         if (this.diffConfig.hasGuide) {
             this.buildGuideMarkers();
@@ -194,6 +220,27 @@ export class Level0 extends Level {
         this.buildCrates();
         this.buildPortalStructure();
         this.buildWallDetails();
+        this.buildDecor();
+    }
+
+    // Objetos de ambientação novos (gaveteiro, mesa, sacos de lixo,
+    // lanterna, câmera, extintor, computador antigo, carrinho).
+    // Caixotes já existem via buildCrates() — não duplicados aqui.
+    // Encostados na parede mais próxima de cada célula (não soltos no
+    // meio do chão) via placePropAgainstWall.
+    buildDecor() {
+        placePropAgainstWall(this, createFilingCabinetProp, 7, 1);
+        placePropAgainstWall(this, createTableProp, 14, 7);
+        placePropAgainstWall(this, createOldComputerProp, 16, 7);
+        placePropAgainstWall(this, createTrashBagsProp, 2, 9);
+        placePropAgainstWall(this, createLanternProp, 5, 7);
+        placePropAgainstWall(this, createExtinguisherProp, 11, 7);
+        placePropAgainstWall(this, createCartProp, 5, 13);
+
+        // Câmera de segurança — montada na parede perto da entrada,
+        // sem colisão (fica acima da altura de andar).
+        const p = this.cellToWorld(9, 1);
+        placeWallProp(this, createCameraProp, p.x, 2.15, p.z + this.cellSize / 2 - 0.08, Math.PI);
     }
 
     buildPillars() {
@@ -414,15 +461,9 @@ export class Level0 extends Level {
 
     buildSupportItems() {
         const items = [];
-        if (this.difficulty === 'normal') {
+        if (this.difficulty === 'hard') {
             items.push(
-                { glyph: SUPPORT_ITEM_CELLS.radar, id: 'radar', prompt: '[E] Pegar radar', color: 0x44ffaa },
-                { glyph: SUPPORT_ITEM_CELLS.phone, id: 'phone', prompt: '[E] Pegar celular', color: 0x66ccff }
-            );
-        } else if (this.difficulty === 'hard') {
-            items.push(
-                { glyph: SUPPORT_ITEM_CELLS.flashlight, id: 'flashlight', prompt: '[E] Pegar lanterna', color: 0xffdd66 },
-                { glyph: SUPPORT_ITEM_CELLS.phone, id: 'phone', prompt: '[E] Pegar celular', color: 0x66ccff }
+                { glyph: SUPPORT_ITEM_CELLS.flashlight, id: 'flashlight', prompt: '[E] Pegar lanterna', color: 0xffdd66 }
             );
         }
 
@@ -844,20 +885,9 @@ export class Level0 extends Level {
     }
 
     playDistantSound() {
-        // 40% posicional distante real
-        if (Math.random() < 0.4 && this.events?.sfxPositional) {
-            // escolhe célula distante válida
-            const cols = this.cols, rows = this.rows;
-            for (let tries=0; tries<8; tries++) {
-                const c = Math.floor(Math.random()*cols);
-                const r = Math.floor(Math.random()*rows);
-                if (this.grid[r][c] === '#') continue;
-                const w = this.cellToWorld(c, r);
-                if (Math.hypot(w.x - this.playerPosition.x, w.z - this.playerPosition.z) < 9) continue;
-                this.events.sfxPositional('distant', w);
-                return;
-            }
-        }
+        // "distant" é um efeito procedural, não um buffer do manifesto;
+        // chamá-lo como sfxPositional produzia um warning e caía no mesmo
+        // fallback global de qualquer forma.
         this.events?.sfx('distant');
     }
 

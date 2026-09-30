@@ -1,61 +1,115 @@
-globalThis.document = {
-    addEventListener() {},
-    pointerLockElement: null
-};
-globalThis.window = {};
-
-const { InputManager } = await import('../src/systems/InputManager.js');
-const { Player } = await import('../src/player/Player.js');
-const { Level } = await import('../src/world/Level.js');
-const { MAP } = await import('../src/world/MapData.js');
+// Testes lógicos de locomotion (sem hardware): magnitude analógica,
+// aceleração/desaceleração progressiva, sprint gradual, desktop intacto.
+const { PlayerMovement } = await import('../src/player/PlayerMovement.js');
 const { CONFIG } = await import('../src/core/Config.js');
-const THREE = await import('three');
+const { Level } = await import('../src/world/Level.js');
 
-const camera = new THREE.PerspectiveCamera(75, 1, 0.05, 100);
+let pass = 0, fail = 0;
+const ok = (name, cond, extra = '') => {
+    if (cond) { pass++; console.log(`PASS ${name}`); }
+    else { fail++; console.error(`FAIL ${name} ${extra}`); }
+};
+const openWorld = { isSolidAt: () => false };
 
-class TestLevel extends Level {
-    constructor(scene) {
-        super(scene);
-        this.grid = MAP;
-        this.rows = MAP.length;
-        this.cols = MAP[0].length;
-        const spawn = { col: 1, row: 1 };
-        const w = this.cellToWorld(spawn.col, spawn.row);
-        this.spawnPoint.set(w.x, CONFIG.player.height, w.z);
-    }
+const speedOf = (m) => Math.hypot(m.currentVelocity.x, m.currentVelocity.z);
+
+// 1. magnitude analógica preservada: stick 0.3 → ~30% da velocidade
+{
+    const m = new PlayerMovement(openWorld);
+    m.setPosition(0, 0);
+    m.update(1.0, { x: 0, z: -0.3 }, false, { walk: 2, sprint: 4 }, { acceleration: 50, deceleration: 50 });
+    ok('stick 0.3 → ~30% walk', Math.abs(speedOf(m) - 0.6) < 0.02, `got ${speedOf(m)}`);
+}
+// 2. gripSmooth 0.2 NÃO produz velocidade máxima (bug do normalize)
+{
+    const m = new PlayerMovement(openWorld);
+    m.setPosition(0, 0);
+    m.update(1.0, { x: 0, z: -0.05 }, false, { walk: 2, sprint: 4 }, { acceleration: 50, deceleration: 50 });
+    ok('input 0.05 → 0.1 (não 2.0)', Math.abs(speedOf(m) - 0.1) < 0.02, `got ${speedOf(m)}`);
+}
+// 3. aceleração progressiva (não instantânea)
+{
+    const m = new PlayerMovement(openWorld);
+    m.setPosition(0, 0);
+    m.update(0.1, { x: 0, z: -1 }, false, { walk: 2, sprint: 4 }, { acceleration: 2, deceleration: 10 });
+    ok('accel 2: 0.1s → 0.2 (não 2.0)', Math.abs(speedOf(m) - 0.2) < 0.02, `got ${speedOf(m)}`);
+    m.update(0.1, { x: 0, z: -1 }, false, { walk: 2, sprint: 4 }, { acceleration: 2, deceleration: 10 });
+    ok('accel progressiva acumula → 0.4', Math.abs(speedOf(m) - 0.4) < 0.02, `got ${speedOf(m)}`);
+}
+// 4. desaceleração progressiva (rápida mas não instantânea, sem sliding longo)
+{
+    const m = new PlayerMovement(openWorld);
+    m.setPosition(0, 0);
+    m.update(1.0, { x: 0, z: -1 }, false, { walk: 2, sprint: 4 }, { acceleration: 50, deceleration: 10 });
+    ok('atinge 2.0', Math.abs(speedOf(m) - 2.0) < 0.02, `got ${speedOf(m)}`);
+    m.update(0.1, { x: 0, z: 0 }, false, { walk: 2, sprint: 4 }, { acceleration: 50, deceleration: 10 });
+    ok('decel 10: 0.1s → 1.0 (não 0)', Math.abs(speedOf(m) - 1.0) < 0.02, `got ${speedOf(m)}`);
+    m.update(0.2, { x: 0, z: 0 }, false, { walk: 2, sprint: 4 }, { acceleration: 50, deceleration: 10 });
+    ok('para sem sliding longo → 0', speedOf(m) < 0.02, `got ${speedOf(m)}`);
+}
+// 5. sprint gradual (walk→sprint e sprint→walk sem salto)
+{
+    const m = new PlayerMovement(openWorld);
+    m.setPosition(0, 0);
+    const dyn = { acceleration: 2, deceleration: 8 };
+    m.update(2.0, { x: 0, z: -1 }, false, { walk: 2, sprint: 4 }, dyn);
+    ok('walk cheio 2.0', Math.abs(speedOf(m) - 2.0) < 0.02, `got ${speedOf(m)}`);
+    m.update(0.1, { x: 0, z: -1 }, true, { walk: 2, sprint: 4 }, dyn);
+    ok('sprint gradual → 2.2 (não 4.0)', Math.abs(speedOf(m) - 2.2) < 0.02, `got ${speedOf(m)}`);
+    m.update(0.1, { x: 0, z: -1 }, false, { walk: 2, sprint: 4 }, dyn);
+    ok('volta p/ walk gradual → 2.0 (não salto)', Math.abs(speedOf(m) - 2.0) < 0.05, `got ${speedOf(m)}`);
+}
+// 6. desktop intacto: resposta imediata legada
+{
+    const m = new PlayerMovement(openWorld);
+    m.setPosition(0, 0);
+    m.update(0.016, { x: 0, z: -1 }, false, null, null);
+    ok('desktop imediato → CONFIG.player.speed', Math.abs(speedOf(m) - CONFIG.player.speed) < 0.001, `got ${speedOf(m)}`);
+}
+// 7. diagonal digital limitada a 1x (sem boost sqrt2)
+{
+    const m = new PlayerMovement(openWorld);
+    m.setPosition(0, 0);
+    m.update(1.0, { x: 1, z: 1 }, false, { walk: 2, sprint: 4 }, { acceleration: 50, deceleration: 50 });
+    ok('diagonal clamp → 2.0', Math.abs(speedOf(m) - 2.0) < 0.02, `got ${speedOf(m)}`);
+}
+// 8. blink respeita collision (nunca atravessa parede)
+{
+    const wall = { isSolidAt: (x) => x > 1.0 };
+    const m = new PlayerMovement(wall);
+    m.setPosition(0, 0);
+    const travelled = m.blinkStep({ x: 1, z: 0 }, 5.0);
+    ok('blink para antes da parede', travelled < 1.2 && m.position.x <= 1.0, `got ${travelled} x=${m.position.x}`);
+    ok('blink zera momentum', speedOf(m) === 0);
+}
+// 9. movimento real desloca com collision por eixo (regressão)
+{
+    const m = new PlayerMovement(openWorld);
+    m.setPosition(0, 0);
+    m.update(1.0, { x: 0, z: -1 }, false, { walk: 2, sprint: 4 }, { acceleration: 50, deceleration: 50 });
+    ok('desloca 2m em 1s', Math.abs(m.position.z - (-2)) < 0.02, `got z=${m.position.z}`);
+}
+// 10. colisão geométrica exata de parede (regressão XR / quina)
+{
+    const level = new Level({ add() {}, remove() {} });
+    level.grid = [
+        '#####',
+        '#..##',
+        '#..##',
+        '#..##',
+        '#####'
+    ];
+    level.rows = 5;
+    level.cols = 5;
+    level.cellSize = 3.5;
+    const openCenter = level.cellToWorld(2, 2);
+    const wallFaceX = level.cellToWorld(3, 2).x - level.cellSize / 2;
+    const m = new PlayerMovement(level);
+    const resolved = m.resolvePosition(wallFaceX - 0.1, openCenter.z, CONFIG.player.radius);
+    ok('parede não aceita interseção do círculo', resolved.corrected === true);
+    ok('resolve afasta o collider da face', resolved.x <= wallFaceX - CONFIG.player.radius + 0.001, `got x=${resolved.x}`);
+    ok('posição livre não é corrigida', level.getCollisionCorrection(openCenter.x, openCenter.z, CONFIG.player.radius) === null);
 }
 
-const scene = new THREE.Scene();
-const level = new TestLevel(scene);
-const input = new InputManager();
-const player = new Player(camera, input, level);
-player.spawnAt(level.spawnPoint.x, level.spawnPoint.z);
-
-console.log('spawn:', player.getPosition().x.toFixed(2), player.getPosition().z.toFixed(2));
-console.log('spawn cell solid?', level.isSolidAt(level.spawnPoint.x, level.spawnPoint.z));
-
-// simular W pressionado
-input.onKeyDown({ code: 'KeyW', repeat: false });
-console.log('forward ativo?', input.isActionActive('forward'));
-
-const before = player.getPosition().clone();
-for (let i = 0; i < 30; i++) {
-    player.update(0.05, true);
-}
-const after = player.getPosition();
-const moved = before.distanceTo(after);
-console.log(`depois de 30 frames: delta=${moved.toFixed(3)} pos=(${after.x.toFixed(2)}, ${after.z.toFixed(2)})`);
-
-// colisão: andar para a parede oeste (col 0)
-input.onKeyUp({ code: 'KeyW' });
-input.onKeyDown({ code: 'KeyA', repeat: false });
-const beforeWall = player.getPosition().clone();
-for (let i = 0; i < 200; i++) {
-    player.update(0.05, true);
-}
-const afterWall = player.getPosition();
-const cell = level.worldToCell(afterWall.x, afterWall.z);
-console.log(`andando p/ oeste: pos=(${afterWall.x.toFixed(2)}, ${afterWall.z.toFixed(2)}) célula=(${cell.x},${cell.z}) sólido? ${level.isSolidAt(afterWall.x, afterWall.z)}`);
-console.log('atravessou parede?', level.isSolidAt(afterWall.x, afterWall.z) ? 'SIM (BUG)' : 'não (ok)');
-
-console.log(moved > 0.1 ? 'MOVIMENTO OK' : 'MOVIMENTO FALHOU');
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);

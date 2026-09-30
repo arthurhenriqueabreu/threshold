@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { Interactable } from './Interactable.js';
+import { CONFIG } from '../core/Config.js';
 
 export class PickupItem extends Interactable {
     constructor(mesh, { id, prompt }) {
@@ -7,8 +8,29 @@ export class PickupItem extends Interactable {
         this.id = id;
         this.prompt = prompt;
         this.collected = false;
+        this.isPickupItem = true;
         this.baseY = mesh.position.y;
+        this.setupInteractionProxy();
         this.setupEffects();
+    }
+
+    setupInteractionProxy() {
+        const root = this.meshes[0];
+        if (!root) return;
+        const radius = CONFIG.interaction?.pickupProxyRadius ?? 0.44;
+        const geometry = new THREE.SphereGeometry(radius, 10, 8);
+        const material = new THREE.MeshBasicMaterial({
+            transparent: true,
+            opacity: 0,
+            depthWrite: false,
+            depthTest: false,
+            colorWrite: false
+        });
+        const proxy = new THREE.Mesh(geometry, material);
+        proxy.name = 'pickup_hit_proxy';
+        proxy.userData.pickupProxy = true;
+        root.add(proxy);
+        this.interactionProxy = proxy;
     }
 
     setupEffects() {

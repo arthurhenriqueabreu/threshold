@@ -67,7 +67,9 @@ export class RetroRenderer {
         // itemSize 3 (z = 0) para que computeBoundingSphere não leia além do
         // array (evita "Computed radius is NaN" em atributo 2D).
         this.postScene = new THREE.Scene();
-        this.postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        // Mantém o fullscreen pass dentro de um frustum convencional.
+        this.postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+        this.postCamera.position.z = 1;
         const geometry = new THREE.BufferGeometry();
         const vertices = new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]);
         geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
@@ -169,6 +171,10 @@ export class RetroRenderer {
 
         // 1) Renderiza a cena para o target low-res.
         this.renderer.setRenderTarget(this.renderTarget);
+        // O camera é filho do XR rig mesmo fora de uma sessão. Força a
+        // atualização da hierarquia antes da passagem offscreen.
+        scene.updateMatrixWorld(true);
+        camera.updateMatrixWorld(true);
         this.renderer.render(scene, camera);
         this.renderer.setRenderTarget(null);
 
@@ -193,10 +199,27 @@ export class RetroRenderer {
                     u.value = jitter;
                     break;
                 case 'snapStrength':
-                    u.value = this.isVRMode ? CONFIG.retro.vrSafe.vertexSnapStrength : CONFIG.retro.vertexSnapStrength;
+                    u.value = this.isVRMode
+                        ? (CONFIG.retro.vrSafe.vertexSnapping ? CONFIG.retro.vrSafe.vertexSnapStrength : 0)
+                        : (CONFIG.retro.vertexSnapping ? CONFIG.retro.vertexSnapStrength : 0);
                     break;
                 case 'affineStrength':
-                    u.value = this.isVRMode ? CONFIG.retro.vrSafe.affineStrength : CONFIG.retro.affineStrength;
+                    u.value = this.isVRMode
+                        ? (CONFIG.retro.vrSafe.affineMapping ? CONFIG.retro.vrSafe.affineStrength : 0)
+                        : CONFIG.retro.affineStrength;
+                    break;
+                case 'quantizeStrength':
+                    u.value = this.isVRMode && CONFIG.retro.vrSafe.colorQuantization
+                        ? CONFIG.retro.vrSafe.quantizationStrength
+                        : 0;
+                    break;
+                case 'colorGradeGamma':
+                    u.value = this.isVRMode
+                        ? (CONFIG.retro.vrSafe.postGamma ?? CONFIG.retro.postGamma)
+                        : 1;
+                    break;
+                case 'quantizeLevels':
+                    u.value = Math.pow(2, CONFIG.retro.colorBits) - 1;
                     break;
                 default:
                     break;

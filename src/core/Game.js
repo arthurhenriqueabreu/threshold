@@ -8,9 +8,10 @@ import { AudioManifest } from '../audio/AudioManifest.js';
 import { NotificationSystem } from '../systems/NotificationSystem.js';
 import { ObjectiveManager } from '../systems/ObjectiveManager.js';
 import { ScoreManager } from '../systems/ScoreManager.js';
-import { LocalGameRepository } from '../systems/GameRepository.js';
+import { ApiGameRepository } from '../systems/GameRepository.js';
 import { InteractionSystem } from '../interactions/InteractionSystem.js';
 import { LevelManager } from '../world/LevelManager.js';
+import { RealRoom } from '../world/RealRoom.js';
 import { EntityManager } from '../entities/EntityManager.js';
 import { Flashlight } from '../player/Flashlight.js';
 import { Player } from '../player/Player.js';
@@ -23,6 +24,11 @@ import { clearRetroHandles } from '../rendering/RetroMaterial.js';
 import { StaticEffect } from '../ui/StaticEffect.js';
 import { ProximityStatic } from '../ui/ProximityStatic.js';
 import { NokiaPhone } from '../ui/NokiaPhone.js';
+import { VRScreenEffects } from '../xr/VRScreenEffects.js';
+import { VRUI } from '../xr/VRUI.js';
+import { VRComfortManager } from '../xr/VRComfort.js';
+import { XRHaptics } from '../xr/XRHaptics.js';
+import { XRPerformanceMonitor } from '../xr/XRPerformanceMonitor.js';
 import { VRButton } from 'three/addons/webxr/VRButton.js';
 import { XRControllerModelFactory } from 'three/addons/webxr/XRControllerModelFactory.js';
 
@@ -52,7 +58,7 @@ export class Game {
         this.gameState = new GameState();
         this.input = new InputManager();
         this.audio = new AudioManager();
-        this.repository = new LocalGameRepository();
+        this.repository = new ApiGameRepository();
         this.difficulty = null;
         this.diffConfig = null;
         this.levelIndex = 0;
@@ -68,10 +74,32 @@ export class Game {
         this.xrRig = null;
         this.vrButton = null;
         this.xrControllers = [];
+        // --- XR entry / pause guards ---
+        // _xrEntryPending=true entre o clique ENTER VR e sessionstart:
+        // onPointerLockChange NÃO pode pausar nesse intervalo.
+        this._xrEntryPending = false;
+        // true se a pausa atual foi intencional (B/Y ou menu), false se foi
+        // apenas perda de pointerlock durante a transição XR.
+        this._realPause = false;
+        this._wasPlayingBeforeXR = false;
+        this.vrEffects = null;
+        this.vrUI = null;
+        // VR comfort (cybersickness mitigation): profiles + persistência.
+        this.comfort = new VRComfortManager();
+        this.haptics = new XRHaptics(() => this.input?.xrSources ?? {});
+        this.perfMonitor = new XRPerformanceMonitor();
+        this.xrSessionPlayTime = 0;
+        this._introContinueResolve = null;
     }
 
     init() {
         this.renderer = new THREE.WebGLRenderer({ antialias: true });
+        // Fixa o mesmo gerenciamento de cor nos dois destinos (canvas e
+        // framebuffer XR). Sem isso, o Quest pode compilar os materiais com
+        // uma resposta de iluminação diferente da prévia desktop.
+        this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+        this.renderer.toneMapping = THREE.NoToneMapping;
+        this.renderer.toneMappingExposure = 1;
         this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, CONFIG.graphics.maxPixelRatio));
         this.container.appendChild(this.renderer.domElement);
 
@@ -97,11 +125,28 @@ export class Game {
         );
         this.setupXR();
 
-        this.clock = new THREE.Clock();
+        // Timer evita o Clock deprecated do Three.js e zera o delta quando a
+        // página perde visibilidade, importante para não dar um tranco ao
+        // voltar de uma pausa/troca de janela durante uma sessão XR.
+        this.clock = new THREE.Timer();
+        this.clock.connect(document);
 
         this.levelManager = new LevelManager(this.scene);
 
         this.notificationSystem = new NotificationSystem('notifications');
+        // Espelha mensagens críticas no HUD VR (DOM invisível no headset).
+        {
+            const origShow = this.notificationSystem.show.bind(this.notificationSystem);
+            this.notificationSystem.show = (msg, opts) => {
+                origShow(msg, opts);
+                try {
+                    if (this.renderer?.xr?.isPresenting) {
+                        this.vrUI?.notify(msg);
+                        this._syncVRHUD();
+                    }
+                } catch { }
+            };
+        }
         this.objectiveManager = new ObjectiveManager(this.gameState);
         this.scoreManager = new ScoreManager(this.gameState);
 
@@ -112,14 +157,24 @@ export class Game {
         // gameState.completeObjective diretamente, também recebam seus pontos.
         this.unsubscribeObjectiveScoring = eventBus.on('objective:completed', (id) => {
             this.scoreManager.award(id);
+            if (this.renderer?.xr?.isPresenting) this._syncVRHUD();
+        });
+        eventBus.on('score:changed', () => {
+            if (this.renderer?.xr?.isPresenting) this._syncVRHUD();
+        });
+        eventBus.on('hud:updateObjectives', () => {
+            if (this.renderer?.xr?.isPresenting) this._syncVRHUD();
         });
 
         this.interactionSystem = new InteractionSystem(this.camera);
-        this.interactionSystem.onPromptChange = (prompt) => this.hud.setPrompt(prompt);
-        this.input.onInteract(() => {
+        this.interactionSystem.onPromptChange = (prompt) => {
+            this.hud.setPrompt(prompt);
+            if (this.renderer?.xr?.isPresenting) this.vrUI?.setHUD({ prompt: prompt ?? '' });
+        };
+        this.input.onInteract((controller = null) => {
             if (this.gameState.state !== 'PLAYING') return;
             if (this.nokiaPhone?.isOpen) return;
-            this.interactionSystem.tryInteract();
+            this.interactionSystem.tryInteract(controller);
         });
         this.input.onKeyPress('KeyF', () => this.toggleFlashlight());
 
@@ -148,11 +203,126 @@ export class Game {
             return true;
         });
         this.input.onXRAction('flashlight', () => this.toggleFlashlight());
-        this.input.onXRAction('phone', () => this.togglePhone());
-        this.input.onXRAction('turn', (direction) => {
-            if (this.gameState.state === 'PLAYING' && !this.nokiaPhone?.isOpen) {
-                this.player?.controller.turnBy(direction * (Math.PI / 6));
+        this.input.onXRAction('phone', () => {
+            if (this.renderer?.xr?.isPresenting && this.vrUI?.isMenuOpen) {
+                this.vrUI.activateFocused();
+                return;
             }
+            this.togglePhone();
+        });
+        this.input.onXRAction('pause', () => {
+            if (this.renderer?.xr?.isPresenting && this.vrUI?.mode === 'comfort') {
+                this.onVRMenuAction('vr-comfort-back');
+                return;
+            }
+            this.togglePauseXR();
+        });
+        this.input.onXRAction('menu-nav', ({ direction, axis } = {}) => {
+            if (this.renderer?.xr?.isPresenting && this.vrUI?.isMenuOpen) {
+                this.vrUI.moveFocus(direction ?? 1, axis ?? 'y');
+            }
+        });
+        this.input.onXRAction('turn', (direction) => {
+            if (this.gameState.state === 'PLAYING' && !this.nokiaPhone?.isOpen && !this.vrUI?.isMenuOpen) {
+                this.snapTurnXR(direction);
+            }
+        });
+        this.input.onXRAction('turn-smooth', ({ value, delta } = {}) => {
+            if (this.gameState.state === 'PLAYING' && !this.nokiaPhone?.isOpen && !this.vrUI?.isMenuOpen) {
+                this.smoothTurnXR(value ?? 0, delta ?? 0);
+            }
+        });
+        // XR trigger também seleciona botões dos menus VR.
+        this.input.onInteract(() => this._xrMenuTrigger());
+
+        // Debug hotkeys (F1-F4)
+        this.input.onKeyPress('F1', () => {
+            if (typeof window === 'undefined') return;
+            window.DEBUG_SHOW_GENERATOR_MARKER = !window.DEBUG_SHOW_GENERATOR_MARKER;
+            const marker = this.level?.generator?.meshes?.[0]?.getObjectByName?.('generatorDebugMarker');
+            if (marker) marker.visible = !!window.DEBUG_SHOW_GENERATOR_MARKER;
+            this.notificationSystem.show(`MARCADOR GERADOR ${window.DEBUG_SHOW_GENERATOR_MARKER ? 'ON' : 'OFF'}`);
+        });
+        this.input.onKeyPress('F2', () => {
+            // dar celular
+            this.handlePickup('phone');
+            this.notificationSystem.show('DEBUG: CELULAR ADICIONADO');
+        });
+        this.input.onKeyPress('F3', () => {
+            // dar radar
+            this.handlePickup('radar');
+            this.notificationSystem.show('DEBUG: RADAR ADICIONADO');
+        });
+        this.input.onKeyPress('F4', () => {
+            // dar ambos
+            this.handlePickup('phone');
+            this.handlePickup('radar');
+            this.notificationSystem.show('DEBUG: CELULAR + RADAR ADICIONADOS');
+        });
+        this.input.onKeyPress('F6', () => {
+            // DEBUG: troca pro quarto "mundo real" em construção, sem
+            // passar pelo fluxo normal de nível (só pra ver o cenário).
+            if (this.level?.group) this.scene.remove(this.level.group);
+            this.level = new RealRoom(this.scene);
+            this.interactionSystem.interactables = [];
+            this.interactionSystem.currentTarget = null;
+            this.hud.setPrompt(null);
+            if (this.entityManager) { this.entityManager.dispose(); this.entityManager = null; }
+            this.player.movement.collisionWorld = this.level;
+            this._wakeCameraTest = false;
+            this.player.spawnAt(this.level.spawnPoint.x, this.level.spawnPoint.z, this.level.spawnYaw);
+            this.notificationSystem.show('DEBUG: QUARTO REAL (cenário em teste)');
+        });
+        this.input.onKeyPress('F7', () => {
+            // DEBUG: ETAPA 2 — pose da câmera de despertar (deitado no
+            // travesseiro). Garante que estamos no quarto primeiro, se
+            // ainda não estiver. Alterna entre a pose fixa e o controle
+            // normal de andar pela sala.
+            if (!(this.level instanceof RealRoom)) {
+                if (this.level?.group) this.scene.remove(this.level.group);
+                this.level = new RealRoom(this.scene);
+                this.interactionSystem.interactables = [];
+                this.interactionSystem.currentTarget = null;
+                this.hud.setPrompt(null);
+                if (this.entityManager) { this.entityManager.dispose(); this.entityManager = null; }
+                this.player.movement.collisionWorld = this.level;
+            }
+            this._wakeCameraTest = !this._wakeCameraTest;
+            const pose = this.level.getWakeCameraPose();
+            const inXR = this.renderer.xr.isPresenting;
+
+            if (this._wakeCameraTest) {
+                if (inXR) {
+                    // VR: a rotação sempre vem do sensor do headset — só
+                    // dá pra posicionar a ORIGEM (xrRig). Pra simular a
+                    // altura de estar deitado mesmo com quem testa em
+                    // pé, medimos a altura real atual (mundo) e aplicamos
+                    // um deslocamento em Y no rig pra compensar — assim
+                    // a altura final bate com a pose alvo seja qual for
+                    // a altura de quem estiver com o headset.
+                    const realWorldPos = new THREE.Vector3();
+                    this.camera.getWorldPosition(realWorldPos);
+                    const offsetY = pose.position.y - realWorldPos.y;
+                    this.xrRig.position.set(pose.position.x, offsetY, pose.position.z);
+                    this.notificationSystem.show('DEBUG: CÂMERA DE DESPERTAR — VR (F7 de novo pra sair)');
+                } else {
+                    this.camera.position.copy(pose.position);
+                    this.camera.rotation.set(pose.pitch, pose.yaw, 0, 'YXZ');
+                    this.notificationSystem.show('DEBUG: CÂMERA DE DESPERTAR (F7 de novo pra sair)');
+                }
+            } else {
+                if (inXR) {
+                    this.xrRig.position.set(this.level.spawnPoint.x, 0, this.level.spawnPoint.z);
+                }
+                this.player.spawnAt(this.level.spawnPoint.x, this.level.spawnPoint.z, this.level.spawnYaw);
+                this.notificationSystem.show('DEBUG: controle normal');
+            }
+        });
+        this.input.onKeyPress('F8', () => {
+            // DEBUG: roda a sequência de despertar inteira (fade, hold,
+            // respiração, clareamento) sem precisar terminar o jogo.
+            this.notificationSystem.show('DEBUG: SEQUÊNCIA DE DESPERTAR (F8)');
+            this.playWakeSequence();
         });
         document.getElementById('item-phone')?.addEventListener('click', () => this.togglePhone());
         this.ui = new UIManager({
@@ -163,7 +333,7 @@ export class Game {
         });
         this.endScreen = new EndScreen({ onRestart: () => this.restart() });
         this.mainMenu = new MainMenu({
-            onStart: (name, difficulty) => this.start(name, difficulty),
+            onStart: (name, levelIndex) => this.start(name, levelIndex),
             onUiClick: () => {
                 this.audio.init();
                 this.audio.resume();
@@ -208,6 +378,10 @@ export class Game {
         this.renderer.xr.enabled = true;
         this.renderer.xr.cameraAutoUpdate = true;
         this.renderer.xr.setReferenceSpaceType('local-floor');
+        const xrScale = CONFIG.retro.vrSafe?.framebufferScale;
+        if (Number.isFinite(xrScale) && this.renderer.xr.setFramebufferScaleFactor) {
+            this.renderer.xr.setFramebufferScaleFactor(xrScale);
+        }
 
         // The rig is the locomotion origin. WebXR keeps the headset pose on the
         // camera while the game moves this group through the level.
@@ -216,16 +390,53 @@ export class Game {
         this.scene.add(this.xrRig);
         this.xrRig.add(this.camera);
 
+        // Efeitos stereo-safe + HUD/menus 3D (sem DOM no headset).
+        this.vrEffects = new VRScreenEffects(this.camera);
+        this.vrUI = new VRUI(this.camera);
+        this.vrUI.setActionHandler((id) => this.onVRMenuAction(id));
+        // Aplica o comfort profile salvo e re-aplica em tempo real a cada
+        // troca no menu (sem restart, sem tocar no áudio).
+        this.applyComfort();
+        this.comfort.onChange(() => this.applyComfort());
+
         this.vrButton = VRButton.createButton(this.renderer, {
             requiredFeatures: ['local-floor'],
             optionalFeatures: ['bounded-floor']
         });
         this.vrButton.setAttribute('aria-label', 'Entrar em realidade virtual');
-        // Menu não é visível em headset: só mostra VR após iniciar jogo
+        // O botão oficial é a única entrada para a sessão XR. Em navegadores
+        // sem suporte, VRButton retorna um link de fallback; escondê-lo evita
+        // deixar "VR NOT SUPPORTED" sobre o rodapé/HUD.
+        this.vrButton.id = 'VRButton';
         this.vrButton.style.display = 'none';
+        const syncVRButton = () => {
+            const label = (this.vrButton.textContent || '').trim().toUpperCase();
+            const supported = label === 'ENTER VR' || label === 'EXIT VR';
+            const unsupported = label.includes('NOT SUPPORTED')
+                || label.includes('NOT ALLOWED')
+                || label.includes('NOT AVAILABLE')
+                || label.includes('NEEDS HTTPS');
+            this.vrButton.style.display = supported && !unsupported ? '' : 'none';
+        };
+        // VRButton resolve a própria detecção de suporte em outra promise e
+        // pode sobrescrever display depois da nossa checagem. Observe apenas
+        // mudanças de texto para esconder o fallback sem corrida assíncrona.
+        if (typeof MutationObserver !== 'undefined') {
+            this._vrButtonObserver = new MutationObserver(syncVRButton);
+            this._vrButtonObserver.observe(this.vrButton, {
+                childList: true,
+                characterData: true,
+                subtree: true
+            });
+        }
+        if (typeof navigator !== 'undefined' && navigator.xr?.isSessionSupported) {
+            navigator.xr.isSessionSupported('immersive-vr').then(syncVRButton).catch(syncVRButton);
+        }
+        syncVRButton();
         document.body.appendChild(this.vrButton);
-        // Overlay 3D simples para pausa/menu em VR (DOM não aparece no headset)
-        this._vrMenuGroup = null;
+        // Marca transição pendente ANTES do browser abrir a sessão, no mesmo
+        // gesto do usuário (sem timeout arbitrário como solução).
+        this.vrButton.addEventListener('click', () => this.beginXREntry(), { capture: true });
 
         const controllerModelFactory = new XRControllerModelFactory();
         for (let index = 0; index < 2; index++) {
@@ -239,16 +450,17 @@ export class Game {
             const ray = new THREE.Line(rayGeometry, new THREE.LineBasicMaterial({
                 color: 0xd8c26a,
                 transparent: true,
-                opacity: 0.35
+                opacity: 0.22
             }));
             ray.name = 'xr-target-ray';
-            ray.scale.z = 4;
+            ray.scale.z = 1.2;
             controller.add(ray);
-            this.scene.add(controller);
+            // Keep hands/rays under the same locomotion origin as the camera.
+            this.xrRig.add(controller);
 
             const grip = this.renderer.xr.getControllerGrip(index);
             grip.add(controllerModelFactory.createControllerModel(grip));
-            this.scene.add(grip);
+            this.xrRig.add(grip);
             this.xrControllers.push({ controller, grip });
         }
 
@@ -256,95 +468,99 @@ export class Game {
         this.renderer.xr.addEventListener('sessionend', () => this.onXRSessionChange(false));
     }
 
+    // Chamado no gesto do usuário que inicia a sessão XR.
+    beginXREntry() {
+        this._xrEntryPending = true;
+        this._wasPlayingBeforeXR = this.gameState.state === 'PLAYING';
+        try { this.audio.init(); } catch { }
+        try { this.audio.resume(); } catch { }
+    }
+
+    resolveVRPlayerName() {
+        const fromInput = document.getElementById('player-name-input')?.value?.trim();
+        if (fromInput) return fromInput;
+        try {
+            const saved = localStorage.getItem('threshold_playerName');
+            if (saved?.trim()) return saved.trim();
+        } catch { }
+        return 'JOGADOR VR';
+    }
+
+    // Compat: textos antigos do menu VR agora viram modos do VRUI.
     _ensureVRMenu() {
-        if (this._vrMenuGroup) return this._vrMenuGroup;
-        const group = new THREE.Group();
-        group.name = 'VRMenu';
-        const canvas = document.createElement('canvas');
-        canvas.width = 1024;
-        canvas.height = 512;
-        const ctx = canvas.getContext('2d');
-        const tex = new THREE.CanvasTexture(canvas);
-        tex.colorSpace = THREE.SRGBColorSpace;
-        tex.minFilter = THREE.LinearFilter;
-        tex.magFilter = THREE.LinearFilter;
-        const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide });
-        const geo = new THREE.PlaneGeometry(1.6, 0.8);
-        const mesh = new THREE.Mesh(geo, mat);
-        mesh.name = 'VRMenuPlane';
-        group.add(mesh);
-        group.visible = false;
-        // head-locked: filho da câmera para sempre à frente do headset
-        const anchor = this.camera || this.xrRig;
-        anchor?.add(group);
-        // à frente dos olhos, levemente abaixo
-        group.position.set(0, -0.12, -1.65);
-        // canvas helper
-        group.userData.canvas = canvas;
-        group.userData.ctx = ctx;
-        group.userData.tex = tex;
-        group.userData.mesh = mesh;
-        this._vrMenuGroup = group;
-        return group;
+        return this.vrUI?.group ?? null;
     }
 
     _updateVRMenu(text) {
-        const g = this._ensureVRMenu();
-        if (!g) return;
-        const ctx = g.userData.ctx;
-        const canvas = g.userData.canvas;
-        const tex = g.userData.tex;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        // fundo
-        ctx.fillStyle = 'rgba(12,10,8,0.92)';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.strokeStyle = '#d8c26a';
-        ctx.lineWidth = 6;
-        ctx.strokeRect(8, 8, canvas.width - 16, canvas.height - 16);
-        ctx.fillStyle = '#d8c26a';
-        ctx.font = 'bold 54px VT323, monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('THRESHOLD', canvas.width / 2, 84);
-        ctx.fillStyle = '#fff4d6';
-        ctx.font = '28px VT323, monospace';
-        const lines = (text || '').split('\n');
-        let y = 148;
-        for (const line of lines) {
-            ctx.fillText(line, canvas.width / 2, y);
-            y += 36;
+        // legado: redireciona p/ notificação VR quando em HUD
+        if (this.vrUI && this.gameState.state === 'PLAYING') {
+            this.vrUI.notify(text);
         }
-        ctx.fillStyle = 'rgba(216,194,106,0.95)';
-        ctx.font = '22px VT323, monospace';
-        ctx.fillText('Mova as mãos como caminhada • Rápido = correr • Stick esq. strafe • Stick dir. girar', canvas.width / 2, canvas.height - 38);
-        tex.needsUpdate = true;
     }
 
     _setVRMenuVisible(visible, text) {
-        const g = this._ensureVRMenu();
-        if (!g) return;
-        if (visible) this._updateVRMenu(text);
-        g.visible = visible;
+        if (!this.vrUI) return;
+        if (!visible) {
+            if (!this.vrUI.isMenuOpen && this.gameState.state === 'PLAYING') {
+                this.vrUI.show('playing');
+            } else if (!visible && this.vrUI.isMenuOpen) {
+                this.vrUI.hide();
+            }
+            return;
+        }
+        this.vrUI.notify(text);
     }
 
     onXRSessionChange(active) {
         this.retroRenderer.setVRMode(active);
         if (active) {
+            // Fim da transição: limpa flag pendente com evento real, não timeout.
+            const wasEntry = this._xrEntryPending;
+            this._xrEntryPending = false;
             this.input.clearActions();
-            try { document.exitPointerLock(); } catch {}
+            try { document.exitPointerLock(); } catch { }
+            try { this.audio.resume(); } catch { }
             this.player?.controller.setXRActive(true);
+            // Comfort: sessão nova = monitor zerado, flicker XR ativo.
+            try { this.perfMonitor?.reset?.(); } catch { }
+            try {
+                const eff = this.comfort.getEffectiveConfig();
+                this.level?.lighting?.setXRComfort?.(eff.flickerScale, true);
+            } catch { }
+            try { this.applyComfort(); } catch { }
             // Sincroniza rig na posição real do jogador (spawn foi com isPresenting false → rig 0,0)
             if (this.player) {
                 const p = this.player.getPosition();
                 this.xrRig.position.set(p.x, 0, p.z);
             }
+            // Anexa lanterna/Nokia aos controllers quando já existem.
+            this._attachXRDevices();
             if (this.gameState.state === 'MENU') {
-                this._setVRMenuVisible(true, 'THRESHOLD — A LIMINAL ESCAPE\n\nVocê entrou em VR no MENU\n\nSAIA DO VR (botão superior)\nInicie no monitor: nome + dificuldade\nDepois entre em VR novamente');
+                // Menu principal 3D — nunca "saia do VR p/ iniciar no monitor".
+                this.mainMenu.hide();
+                this.vrUI.show('main', {
+                    playerName: this.gameState.playerName || this.resolveVRPlayerName(),
+                    levelName: CONFIG.levels.names[this.gameState.currentLevelIndex] ?? 'CHÃO 0'
+                });
             } else if (this.gameState.state === 'PAUSED') {
-                this._setVRMenuVisible(true, 'PAUSADO\n\nGatilho = interagir [E]\nX = lanterna  A = celular\nMova mãos para andar');
+                if (wasEntry && this._wasPlayingBeforeXR && !this._realPause) {
+                    // Pausa acidental herdada da perda de pointerlock ao entrar:
+                    // restaura PLAYING e esconde painel.
+                    this._realPause = false;
+                    this.gameState.setState('PLAYING');
+                    this._lastPlayStart = performance.now();
+                    this.vrUI.show('playing');
+                    this._syncVRHUD();
+                } else {
+                    this.vrUI.show('pause');
+                }
             } else if (this.gameState.state === 'PLAYING') {
-                this._setVRMenuVisible(false, '');
-                // hint breve ao entrar
-                setTimeout(() => this._setVRMenuVisible(false, ''), 50);
+                this.vrUI.show('playing');
+                this._syncVRHUD();
+            } else if (this.gameState.state === 'GAMEOVER') {
+                this.showVRGameOver();
+            } else if (this.gameState.state === 'COMPLETED') {
+                this.showVREnd();
             }
             // reseta arm-swing
             if (this.input._armSwing) {
@@ -353,13 +569,275 @@ export class Game {
             }
             return;
         }
+        // ---- sessionend ----
+        this._xrEntryPending = false;
         this.input.clearActions();
+        try { this.level?.lighting?.setXRComfort?.(1, false); } catch { }
         if (this.nokiaPhone?.isOpen) this.nokiaPhone.close();
-        this._setVRMenuVisible(false, '');
+        this.nokiaPhone?.setXRController(null);
+        if (this.flashlight) this.flashlight.setXRController(null);
+        this.vrUI?.hide();
+        this.vrEffects?.stopAll();
         this.xrRig?.position.set(0, 0, 0);
         this.player?.controller.setXRActive(false);
-        // volta a esconder botão se voltou ao menu
-        if (this.gameState.state !== 'PLAYING') this.vrButton.style.display = 'none';
+        this.vrEffects?.fadeTo(0, 0);
+        // NÃO zera progresso; NÃO prende em PAUSED: se a pausa era apenas a
+        // acidental da transição, volta a PLAYING no desktop; pausa real mantém.
+        if (this.gameState.state === 'PAUSED' && !this._realPause) {
+            this.gameState.setState('PLAYING');
+            this._lastPlayStart = performance.now();
+            this.ui.hidePause();
+        }
+    }
+
+    _attachXRDevices() {
+        const left = this.input.xrSources.left?.controller ?? null;
+        const right = this.input.xrSources.right?.controller ?? null;
+        try { this.nokiaPhone?.setXRController(left); } catch { }
+        try { if (this.flashlight) this.flashlight.setXRController(right); } catch { }
+    }
+
+    // --- VR comfort ----------------------------------------------------
+    // Aplica walk/sprint/accel/vignette/proximity/flicker do profile ativo
+    // em tempo real (sem restart). Nunca toca em áudio, tracking ou FOV.
+    applyComfort() {
+        const eff = this.comfort.getEffectiveConfig();
+        try { this.vrEffects?.applyComfortProfile(eff, eff.profileName); } catch { }
+        try {
+            const scale = eff.effectsScale ?? 1;
+            this.vrEffects?.setEffectsScale(scale);
+        } catch { }
+        try { this.input?.setLocomotionMode?.(eff.locomotionMode); } catch { }
+        try { this.input?.setTurnMode?.(eff.turnMode); } catch { }
+        try { this.level?.lighting?.setXRComfort?.(eff.flickerScale, this.renderer?.xr?.isPresenting); } catch { }
+        try {
+            this.player?.setComfortHooks?.({
+                comfortProfile: () => this.comfort.getEffectiveConfig(),
+                locomotionMode: () => this.comfort.getEffectiveConfig().locomotionMode,
+                consumeBlink: () => this.input?.consumeBlinkStep?.(),
+                onBlink: () => {
+                    try { this.haptics?.blink?.(); } catch { }
+                    try { this.vrEffects?.pulseSnapTurn?.(); } catch { }
+                }
+            });
+        } catch { }
+        // Re-desenha o painel conforto se estiver aberto.
+        try {
+            if (this.vrUI?.mode === 'comfort') this._showVRComfort();
+        } catch { }
+    }
+
+    _comfortUIData() {
+        const eff = this.comfort.getEffectiveConfig();
+        const ov = this.comfort.overrides;
+        return {
+            profileName: eff.profileName,
+            vignette: eff.vignette,
+            turnMode: eff.turnMode,
+            snapTurnAngle: eff.snapTurnAngle,
+            speedScale: ov.speedScale ?? 1,
+            effectsScale: ov.effectsScale ?? 'normal',
+            locomotionMode: eff.locomotionMode
+        };
+    }
+
+    _showVRComfort() {
+        const from = (this.gameState.state === 'MENU') ? 'main' : 'pause';
+        this.vrUI?.show('comfort', { from, comfort: this._comfortUIData() });
+    }
+
+    // --- VR menus / pause ------------------------------------------------
+    onVRMenuAction(id) {
+        try { this.audio.sfx('ui'); } catch { }
+        if (id === 'vr-comfort') {
+            this._showVRComfort();
+            return;
+        }
+        if (id === 'vr-comfort-back') {
+            const from = this.vrUI?._comfortReturn ?? 'pause';
+            if (from === 'main' || this.gameState.state === 'MENU') {
+                this.vrUI?.show('main', {
+                    playerName: this.gameState.playerName || this.resolveVRPlayerName(),
+                    levelName: CONFIG.levels.names[this.gameState.currentLevelIndex] ?? 'CHÃO 0'
+                });
+            } else {
+                this.vrUI?.show('pause', { sessionTimeSec: this.xrSessionPlayTime });
+            }
+            return;
+        }
+        if (id === 'vr-profile-prev' || id === 'vr-profile-next') {
+            this.comfort.cycleProfile(id === 'vr-profile-next' ? 1 : -1);
+            return;
+        }
+        if (id === 'vr-vignette') {
+            const eff = this.comfort.getEffectiveConfig();
+            this.comfort.setOverride('vignette', !eff.vignette);
+            return;
+        }
+        if (id === 'vr-turn-mode') {
+            const eff = this.comfort.getEffectiveConfig();
+            this.comfort.setOverride('turnMode', eff.turnMode === 'smooth' ? 'snap' : 'smooth');
+            return;
+        }
+        if (id === 'vr-speed') {
+            const cur = this.comfort.overrides.speedScale ?? 1;
+            this.comfort.setOverride('speedScale', cur < 1 ? 1 : 0.75);
+            return;
+        }
+        if (id === 'vr-effects') {
+            const cur = this.comfort.overrides.effectsScale ?? 'normal';
+            this.comfort.setOverride('effectsScale', cur === 'reduced' ? 'normal' : 'reduced');
+            return;
+        }
+        if (id === 'vr-locomotion') {
+            const eff = this.comfort.getEffectiveConfig();
+            this.comfort.setOverride('locomotionMode', eff.locomotionMode === 'blink' ? 'continuous' : 'blink');
+            try { this.notificationSystem.show(`LOCOMOÇÃO: ${this.comfort.getEffectiveConfig().locomotionMode === 'blink' ? 'BLINK STEP' : 'CONTÍNUA'}`); } catch { }
+            return;
+        }
+        if (id === 'vr-intro-continue') {
+            if (this._introContinueResolve) {
+                const r = this._introContinueResolve;
+                this._introContinueResolve = null;
+                r();
+            }
+            return;
+        }
+        if (id === 'vr-start' || id === 'vr-again' || id === 'vr-retry') {
+            if (this.gameState.state === 'GAMEOVER' || this.gameState.state === 'COMPLETED' || id !== 'vr-start') {
+                if (this.level || id === 'vr-start' && this.gameState.state === 'MENU') {
+                    // vindo do menu VR: inicia run nova; vindo de gameover/end: restart na sessão
+                    if (this.gameState.state === 'MENU') {
+                        this.start(this.resolveVRPlayerName(), this.gameState.currentLevelIndex ?? 0);
+                    } else {
+                        this.restart();
+                    }
+                    return;
+                }
+            }
+            this.start(this.resolveVRPlayerName(), this.gameState.currentLevelIndex ?? 0);
+        } else if (id === 'vr-resume') {
+            this.resume();
+        } else if (id === 'vr-restart') {
+            this.restart();
+        } else if (id === 'vr-menu') {
+            this.backToMenu();
+            // continua dentro da sessão XR mostrando o menu principal VR
+            if (this.renderer.xr.isPresenting) {
+                this.mainMenu.hide();
+                this.vrUI.show('main', {
+                    playerName: this.gameState.playerName || this.resolveVRPlayerName(),
+                    levelName: CONFIG.levels.names[this.gameState.currentLevelIndex] ?? 'CHÃO 0'
+                });
+            }
+        }
+    }
+
+    _xrMenuTrigger() {
+        // Só interessa em XR com menu VR aberto; em PLAYING o outro handler
+        // (tryInteract) já cuida da interação com o mundo.
+        if (!this.renderer.xr.isPresenting) return;
+        if (!this.vrUI?.isMenuOpen) return;
+        const right = this.input.xrSources.right?.controller;
+        const left = this.input.xrSources.left?.controller;
+        if (this.vrUI.activatePicked(right)) return;
+        this.vrUI.activatePicked(left);
+    }
+
+    togglePauseXR() {
+        if (!this.renderer.xr.isPresenting) return;
+        if (this.gameState.state === 'PLAYING') {
+            this._realPause = true;
+            this.pause();
+        } else if (this.gameState.state === 'PAUSED') {
+            this._realPause = false;
+            this.resume();
+        }
+    }
+
+    // Snap turn rotaciona o RIG (nunca o quaternion da câmera WebXR).
+    // Head tracking 1:1 preservado — sem translation jump, sem smoothing
+    // da pose do headset. Ângulo vem do comfort (30° default, 45° opcional).
+    snapTurnXR(direction) {
+        if (!this.renderer.xr.isPresenting || !this.xrRig) {
+            this.player?.controller.turnBy(direction * (Math.PI / 6));
+            return;
+        }
+        const deg = this.comfort?.getEffectiveConfig?.().snapTurnAngle
+            ?? CONFIG.xr?.snapTurnAngle ?? 30;
+        const angle = direction * THREE.MathUtils.degToRad(deg);
+        // Rotaciona o mundo ao redor da cabeça: preserva posição do headset.
+        const headPos = new THREE.Vector3();
+        this.camera.getWorldPosition(headPos);
+        const rigPos = this.xrRig.position.clone();
+        const offset = headPos.clone().sub(rigPos);
+        offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+        this.xrRig.position.copy(headPos).sub(offset);
+        this.xrRig.rotation.y += angle;
+        // Mantém yaw desktop sincronizado p/ minimapa/bússola.
+        if (this.player?.controller) this.player.controller.yaw += angle;
+        // Pulso curtíssimo opcional na vignette (só se habilitada).
+        try { this.vrEffects?.pulseSnapTurn?.(); } catch { }
+    }
+
+    smoothTurnXR(value, delta) {
+        if (!this.renderer.xr.isPresenting || !this.xrRig) return;
+        const dt = Math.max(0, Math.min(0.05, Number(delta) || 0));
+        const input = Math.max(-1, Math.min(1, Number(value) || 0));
+        if (dt <= 0 || Math.abs(input) < 0.001) return;
+        const angle = -input * THREE.MathUtils.degToRad(CONFIG.xr?.smoothTurnSpeed ?? 85) * dt;
+        const headPos = new THREE.Vector3();
+        this.camera.getWorldPosition(headPos);
+        const rigPos = this.xrRig.position.clone();
+        const offset = headPos.clone().sub(rigPos);
+        offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+        this.xrRig.position.copy(headPos).sub(offset);
+        this.xrRig.rotation.y += angle;
+        if (this.player?.controller) this.player.controller.yaw += angle;
+    }
+
+    // Posição do jogador p/ gameplay (entidade/portal/áudio): rig + headset.
+    // Room-scale desloca a cabeça dentro do rig; a colisão corrige o rig quando
+    // esse deslocamento físico encosta numa parede.
+    getXRPlayerWorldPosition(out = new THREE.Vector3()) {
+        if (this.renderer.xr.isPresenting) {
+            this.camera.getWorldPosition(out);
+            return out;
+        }
+        const p = this.player?.getPosition();
+        if (p) return out.copy(p);
+        return out.set(0, 0, 0);
+    }
+
+    _syncVRHUD() {
+        if (!this.vrUI || !this.renderer.xr.isPresenting) return;
+        const names = CONFIG.levels.names ?? [];
+        const levelName = names[this.levelIndex] ?? `NÍVEL ${this.levelIndex}`;
+        const diffName = this.diffConfig?.name ?? this.difficulty ?? '';
+        const active = this.objectiveManager?.objectives?.filter(o => !o.completed).slice(0, 3) ?? [];
+        const done = this.objectiveManager?.objectives?.filter(o => o.completed).length ?? 0;
+        const total = this.objectiveManager?.objectives?.length ?? 0;
+        const objText = active.length > 0
+            ? active.map(o => `• ${o.title}`).join('\n')
+            : `TUDO CONCLUÍDO (${done}/${total})`;
+        this.vrUI.setHUD({
+            level: `${levelName}${diffName ? ' · ' + diffName : ''}`,
+            score: String(this.gameState.score).padStart(3, '0'),
+            objective: objText
+        });
+    }
+
+    _syncVRLaser() {
+        const right = this.input.xrSources.right?.controller;
+        if (!right) return;
+        const ray = right.children?.find(c => c.name === 'xr-target-ray');
+        if (!ray) return;
+        const hasTarget = !!this.interactionSystem.currentTarget;
+        const d = this.interactionSystem.lastHitDistance;
+        const maxD = CONFIG.xr?.controllerRayDistance ?? 3.0;
+        const len = hasTarget && Number.isFinite(d) ? Math.min(d, maxD) : 1.2;
+        ray.scale.z = Math.max(0.3, len);
+        ray.material.opacity = hasTarget ? 0.85 : 0.22;
     }
 
     showLoadingDone() {
@@ -369,7 +847,10 @@ export class Game {
 
     events() {
         return {
-            notify: (msg, opts) => this.notificationSystem.show(msg, opts),
+            notify: (msg, opts) => {
+                this.notificationSystem.show(msg, opts);
+                if (this.renderer.xr.isPresenting) this.vrUI?.notify(msg);
+            },
             sfx: (name) => this.audio.sfx(name),
             sfxPositional: (name, pos, opts) => {
                 // Usa HRTF quando há um buffer posicional; sons procedurais
@@ -385,37 +866,60 @@ export class Game {
             },
             onPowerRestored: () => {
                 this.objectiveManager.complete('power');
-                try { this.audio.sfx('power'); this.audio.setBusVolume('ambient', 0.3, 0.15); setTimeout(()=> this.audio.setBusVolume('ambient', 1, 1.2), 800); } catch {}
+                try { this.audio.sfx('power'); this.audio.setBusVolume('ambient', 0.3, 0.15); setTimeout(() => this.audio.setBusVolume('ambient', 1, 1.2), 800); } catch { }
             },
             onDoorOpened: () => eventBus.emit('door:opened')
         };
     }
 
-    start(playerName, difficulty = 'normal') {
-        this.difficulty = difficulty;
-        this.diffConfig = CONFIG.difficulty[difficulty];
-        this.gameState.setPlayerName(playerName);
+    start(playerName, levelIndex = 0) {
+        // Estado limpo pra essa partida (score/inventário/objetivos),
+        // mas preserva o checkpoint salvo — assim escolher uma fase já
+        // concluída pra jogar de novo não zera o progresso salvo.
+        const inXR = this.renderer.xr.isPresenting;
+        const resolvedName = (playerName?.trim?.()) || (inXR ? this.resolveVRPlayerName() : 'JOGADOR');
+        try { localStorage.setItem('threshold_playerName', resolvedName); } catch { }
+        this.gameState.reset(true);
+        this.objectiveManager.reset();
+        this.gameState.setPlayerName(resolvedName);
         this.gameState.setState('PLAYING');
+        this._realPause = false;
         this._lastPlayStart = performance.now();
         this.mainMenu.hide();
-        this.hud.setDifficulty(difficulty);
+        this.hud.reset();
+        try { this.hud.setCheckpoint(this.gameState.checkpointLevelIndex ?? 0); } catch { }
         this.hud.show();
-        // VR: menu DOM não aparece no headset, libera botão VR agora
-        this.vrButton.style.display = '';
-        this.loadLevel();
+        this.loadLevel(levelIndex);
         this.proximityStatic.start();
-        if (!this.renderer.xr.isPresenting) this.requestPointerLock();
-        try { this.audio.setReverbForLevel(this.levelIndex); } catch {}
+        if (!inXR) this.requestPointerLock();
+        else {
+            this.vrUI?.show('playing');
+            this._syncVRHUD();
+            this.xrRig.position.set(this.player.getPosition().x, 0, this.player.getPosition().z);
+        }
+        try { this.audio.setReverbForLevel(this.levelIndex); } catch { }
         this.audio.startAmbient(this.diffConfig.flickerIntensity > 1 ? 1.3 : 1.0, this.levelIndex);
         if (this.renderer.xr.isPresenting && this.player) {
             const p = this.player.getPosition();
             this.xrRig.position.set(p.x, 0, p.z);
         }
+
+        // Abertura narrativa — objetivo claro logo de cara, independente
+        // da dificuldade (que agora vem sozinha, por andar).
+        this.notificationSystem.show(
+            'Você escorregou da realidade. Não devia estar aqui. Encontre o caminho de volta.',
+            { duration: 6000 }
+        );
     }
 
     loadLevel(index = this.gameState.currentLevelIndex) {
         this.levelIndex = index;
         this.gameState.currentLevelIndex = index;
+
+        // Dificuldade automática por andar — não é mais escolha do menu.
+        this.difficulty = CONFIG.levels.difficultyByLevel[index] ?? 'normal';
+        this.diffConfig = CONFIG.difficulty[this.difficulty];
+        this.hud.setDifficulty(this.difficulty);
 
         this.level = this.levelManager.load(index, {
             gameState: this.gameState,
@@ -423,11 +927,27 @@ export class Game {
             difficulty: this.difficulty
         });
 
+        // compute required support items for this difficulty and show on HUD
+        const required = [];
+        if (this.diffConfig.hasPhoneRequirement) required.push('phone');
+        if (this.diffConfig.hasRadarRequirement) required.push('radar');
+        if (this.diffConfig.hasFlashlightRequirement) required.push('flashlight');
+        try { this.hud.setRequiredItems(required, this.gameState); } catch { }
+
         this.player = new Player(this.camera, this.input, this.level, {
             xrRig: this.xrRig,
             isXRActive: () => this.renderer.xr.isPresenting
         });
-        this.player.spawnAt(this.level.spawnPoint.x, this.level.spawnPoint.z);
+        this.player.setComfortHooks({
+            comfortProfile: () => this.comfort.getEffectiveConfig(),
+            locomotionMode: () => this.comfort.getEffectiveConfig().locomotionMode,
+            consumeBlink: () => this.input?.consumeBlinkStep?.(),
+            onBlink: () => {
+                try { this.haptics?.blink?.(); } catch { }
+                try { this.vrEffects?.pulseSnapTurn?.(); } catch { }
+            }
+        });
+        this.player.spawnAt(this.level.spawnPoint.x, this.level.spawnPoint.z, this.level.spawnYaw);
         this.level.setPlayerPosition(this.player.getPosition());
         this.level.onPortalEnter = () => this.handlePortalEnter();
 
@@ -461,14 +981,20 @@ export class Game {
                     this._portalHum = this.audio.playPositional('portalHum', new THREE.Vector3(p.x, 1, p.z), { volume: 0.16, loop: true, bus: 'world', refDistance: 2, maxDistance: 38, rolloff: 0.7 });
                     if (this._portalHum) this.audio.fadeGain(this._portalHum.gain.gain, 0.16, 1.2);
                 }
-            } catch {}
+            } catch { }
         });
 
         this.setupEntities();
         if (this.diffConfig.hasFlashlightRequirement) {
             this.setupFlashlight();
         }
+        this._attachXRDevices();
         this.applyDarkness();
+        // Flicker XR usa o scale do profile quando apresentando.
+        try {
+            const eff = this.comfort.getEffectiveConfig();
+            this.level?.lighting?.setXRComfort?.(eff.flickerScale, this.renderer.xr.isPresenting);
+        } catch { }
         this.updateItemUiFromState();
         if (this.gameState.state === 'PLAYING') this.proximityStatic.start();
     }
@@ -497,6 +1023,12 @@ export class Game {
         this.level.refreshInteractionStates?.();
         if (ITEM_ONLY_IDS.includes(itemId)) {
             this.handleItemPickup(itemId);
+            // se este item também for parte das objectives do nível, marque como completo
+            try {
+                if (this.level && Array.isArray(this.level.objectives) && this.level.objectives.some(o => o.id === itemId)) {
+                    this.objectiveManager.complete(itemId);
+                }
+            } catch { }
         } else {
             this.objectiveManager.complete(itemId);
         }
@@ -519,7 +1051,7 @@ export class Game {
             if (!this.flashlight) {
                 this.setupFlashlight();
             }
-            this.hud.setItemOn('flashlight', false);
+            this.hud.setItemOn('flashlight', false, true);
         }
     }
 
@@ -533,7 +1065,7 @@ export class Game {
         // alternância: se lanterna ligada, desliga ao abrir celular
         if (!wasOpen && this.flashlightOn && this.flashlight) {
             this.flashlightOn = this.flashlight.toggle() ? true : false;
-            if (!this.flashlightOn) this.hud.setItemOn('flashlight', false);
+            if (!this.flashlightOn) this.hud.setItemOn('flashlight', false, true);
         }
         if (this.nokiaPhone?.toggle()) {
             this.input.clearActions();
@@ -547,6 +1079,8 @@ export class Game {
         if (this.flashlight) return;
         try {
             this.flashlight = new Flashlight(this.camera);
+            const right = this.input.xrSources.right?.controller ?? null;
+            if (right && this.renderer.xr.isPresenting) this.flashlight.setXRController(right);
         } catch (err) {
             this.flashlight = null;
         }
@@ -566,7 +1100,7 @@ export class Game {
             return;
         }
         this.flashlightOn = this.flashlight.toggle();
-        this.hud.setItemOn('flashlight', this.flashlightOn);
+        this.hud.setItemOn('flashlight', this.flashlightOn, true);
         this.audio.sfx('switch');
     }
 
@@ -630,24 +1164,66 @@ export class Game {
         // Each level has its own portal crossing, so use a unique score key.
         this.gameState.addScore(`portal:${this.levelIndex}`, CONFIG.scoring.portal);
         this.transitioning = true;
+        const inXR = this.renderer.xr.isPresenting;
         if (this.levelIndex >= CONFIG.levels.count - 1) {
             this.completePortalRun();
             return;
         }
         this.gameState.advanceLevel();
         this.input.clearActions();
-        document.exitPointerLock();
+        if (!inXR) document.exitPointerLock();
         const nextName = CONFIG.levels.names[this.gameState.currentLevelIndex] ?? 'NÍVEL ?';
-        try { this.audio.stopAll(); } catch {}
-        this.ui.fadeIn(700).then(async () => {
+        const nextSubtitle = CONFIG.levels.subtitles?.[this.gameState.currentLevelIndex] ?? '';
+        try { this.audio.stopAll(); } catch { }
+        const doSwap = async () => {
             this.unloadLevel();
             this.loadLevel();
-            try { this.audio.setReverbForLevel(this.levelIndex); this.audio.startAmbient(this.diffConfig.flickerIntensity > 1 ? 1.3 : 1.0, this.levelIndex); } catch {}
-            this.ui.fadeOut(500);
-            await this.endScreen.showLevelIntro({ title: nextName }, 2000);
+            this._attachXRDevices();
+            if (this.player && inXR) {
+                const p = this.player.getPosition();
+                this.xrRig.position.set(p.x, 0, p.z);
+            }
+            try { this.audio.setReverbForLevel(this.levelIndex); this.audio.startAmbient(this.diffConfig.flickerIntensity > 1 ? 1.3 : 1.0, this.levelIndex); } catch { }
+            if (inXR) {
+                this._syncVRHUD();
+                await this.vrEffects.fadeTo(0, 500);
+                // Pausa natural: nome do nível + subtítulo no painel VR;
+                // jogador continua quando quiser (TRIGGER) — sem pressa.
+                this.vrUI?.show('intro', { title: nextName, subtitle: nextSubtitle });
+                await this._waitVRIntroContinue();
+                this.vrUI?.show('playing');
+                this._syncVRHUD();
+            } else {
+                this.ui.fadeOut(500);
+            }
+            if (!inXR) {
+                await this.endScreen.showLevelIntro({ title: nextName, subtitle: nextSubtitle }, 2200);
+            }
             this.transitioning = false;
             if (!this.renderer.xr.isPresenting) this.requestPointerLock();
             this.updateItemUiFromState();
+        };
+        if (inXR) {
+            // fade stereo-safe (DOM invisível no headset)
+            this.vrEffects.fadeTo(1, 700).then(doSwap);
+        } else {
+            this.ui.fadeIn(700).then(doSwap);
+        }
+    }
+
+    // Portais são pausas naturais: em XR o próximo nível só começa após
+    // input do jogador (ou timeout de segurança). Nunca instantâneo.
+    _waitVRIntroContinue(timeoutMs = 9000) {
+        return new Promise((resolve) => {
+            let done = false;
+            const finish = () => {
+                if (done) return;
+                done = true;
+                this._introContinueResolve = null;
+                resolve();
+            };
+            this._introContinueResolve = finish;
+            setTimeout(finish, timeoutMs);
         });
     }
 
@@ -664,7 +1240,8 @@ export class Game {
     updateItemUiFromState() {
         this.hud.setRadarEnabled(this.difficulty === 'easy' || this.gameState.hasItem('radar'));
         this.hud.setPhoneEnabled(this.gameState.hasItem('phone'));
-        this.hud.setItemOn('flashlight', this.flashlightOn && this.gameState.hasItem('flashlight'));
+        const hasFlashlight = this.gameState.hasItem('flashlight');
+        this.hud.setItemOn('flashlight', this.flashlightOn && hasFlashlight, hasFlashlight);
     }
 
     unloadLevel() {
@@ -672,9 +1249,9 @@ export class Game {
             try {
                 const h = this._portalHum;
                 this.audio.fadeGain(h.gain.gain, 0, 0.6);
-                setTimeout(()=>{ try{ h.stop(); }catch{} }, 650);
-            } catch {}
-            this._portalHum=null;
+                setTimeout(() => { try { h.stop(); } catch { } }, 650);
+            } catch { }
+            this._portalHum = null;
         }
         if (this.unsubscribePortal) {
             this.unsubscribePortal();
@@ -702,9 +1279,9 @@ export class Game {
     cleanupRun() {
         this.staticEffect.stop();
         this.proximityStatic.stop();
-        try { this.nokiaPhone?.close(); } catch {}
-        try { this.audio.stopAll(); } catch {}
-        try { this.audio.setProximityIntensity(0); } catch {}
+        try { this.nokiaPhone?.close(); } catch { }
+        try { this.audio.stopAll(); } catch { }
+        try { this.audio.setProximityIntensity(0); } catch { }
         this.unloadLevel();
         if (this.flashlight) {
             this.flashlight.dispose();
@@ -716,33 +1293,191 @@ export class Game {
         this.resetFog();
     }
 
+    // -------------------------------------------------------------
+    // Fade-pra-preto compatível com VR de verdade. O overlay 2D normal
+    // (this.ui.fadeIn/fadeOut) é um <div> de HTML — não aparece dentro
+    // do headset. Esta é uma esfera preta presa na própria câmera (por
+    // dentro da cena 3D), então ela renderiza corretamente nos dois
+    // olhos em VR e também no modo desktop normal.
+    // -------------------------------------------------------------
+    ensureWakeFadeOverlay() {
+        if (this._wakeFadeMesh) return this._wakeFadeMesh;
+        const geo = new THREE.SphereGeometry(0.6, 12, 8);
+        const mat = new THREE.MeshBasicMaterial({
+            color: 0x000000,
+            side: THREE.BackSide,
+            transparent: true,
+            opacity: 0,
+            depthTest: false,
+            depthWrite: false,
+            fog: false
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.renderOrder = 9999; // desenha por cima de tudo, sempre
+        mesh.frustumCulled = false;
+        mesh.visible = false;
+        this.camera.add(mesh); // segue a câmera automaticamente (desktop e VR)
+        this._wakeFadeMesh = mesh;
+        return mesh;
+    }
+
+    vrFadeTo(targetOpacity, durationMs) {
+        // Em XR usa o overlay stereo-safe (shader); no desktop mantém a
+        // esfera legada. Mesma assinatura, comportamento idêntico.
+        if (this.renderer?.xr?.isPresenting && this.vrEffects) {
+            return this.vrEffects.fadeTo(targetOpacity, durationMs);
+        }
+        const mesh = this.ensureWakeFadeOverlay();
+        mesh.visible = true;
+        const startOpacity = mesh.material.opacity;
+        return new Promise((resolve) => {
+            const start = performance.now();
+            const step = (now) => {
+                const t = Math.min(1, (now - start) / durationMs);
+                mesh.material.opacity = startOpacity + (targetOpacity - startOpacity) * t;
+                if (t < 1) {
+                    requestAnimationFrame(step);
+                } else {
+                    mesh.visible = mesh.material.opacity > 0.001;
+                    resolve();
+                }
+            };
+            requestAnimationFrame(step);
+        });
+    }
+
+    // Anima setWakeHaze(1 → 0) no nível atual ao longo de durationMs.
+    animateWakeHazeClear(durationMs) {
+        return new Promise((resolve) => {
+            const start = performance.now();
+            const step = (now) => {
+                const t = Math.min(1, (now - start) / durationMs);
+                const eased = 1 - Math.pow(1 - t, 3); // ease-out cúbico
+                this.level?.setWakeHaze?.(1 - eased);
+                if (t < 1) {
+                    requestAnimationFrame(step);
+                } else {
+                    this.level?.clearWakeHaze?.();
+                    resolve();
+                }
+            };
+            requestAnimationFrame(step);
+        });
+    }
+
+    // -------------------------------------------------------------
+    // Sequência de despertar (chamada ao concluir a última fase).
+    // Passos 1-10 do pedido: preto → segura → respiração → clareia
+    // gradual + turvo→nítido → cabeça livre (VR) → sem movimento do
+    // corpo → libera controle no final.
+    // -------------------------------------------------------------
+    async playWakeSequence() {
+        const HOLD_BLACK_MS = 1400;
+        const CLEAR_DURATION_MS = 4200;
+
+        // 1) fade suave pro preto (funciona em VR — ver ensureWakeFadeOverlay)
+        await this.vrFadeTo(1, 900);
+
+        // 2) segura preto por um instante
+        await new Promise((resolve) => setTimeout(resolve, HOLD_BLACK_MS));
+
+        // Troca de cena pro quarto — ainda no preto, jogador não vê a troca
+        if (this.level?.group) this.scene.remove(this.level.group);
+        this.level = new RealRoom(this.scene);
+        this.interactionSystem.interactables = [];
+        this.interactionSystem.currentTarget = null;
+        this.hud.setPrompt(null);
+        if (this.entityManager) { this.entityManager.dispose(); this.entityManager = null; }
+        this.player.movement.collisionWorld = this.level;
+
+        const pose = this.level.getWakeCameraPose();
+        const inXR = this.renderer.xr.isPresenting;
+        if (inXR) {
+            // VR: rotação sempre vem do sensor real do headset — só
+            // posicionamos a origem (xrRig), com deslocamento de altura
+            // pra simular estar deitado seja qual for a altura real de
+            // quem estiver testando.
+            const realWorldPos = new THREE.Vector3();
+            this.camera.getWorldPosition(realWorldPos);
+            const offsetY = pose.position.y - realWorldPos.y;
+            this.xrRig.position.set(pose.position.x, offsetY, pose.position.z);
+        } else {
+            this.camera.position.copy(pose.position);
+            this.camera.rotation.set(pose.pitch, pose.yaw, 0, 'YXZ');
+        }
+
+        // 9) bloqueia movimento corporal — a rotação da cabeça (VR) nunca
+        // é tocada aqui, continua 100% livre o tempo todo.
+        this._wakeSequenceActive = true;
+
+        // 3) respiração sutil
+        try { this.audio.playWakeBreath(); } catch { }
+
+        // turvo máximo antes de clarear
+        this.level.setWakeHaze(1);
+
+        // 4-6) revela a imagem do preto E clareia a névoa/luz ao mesmo
+        // tempo, em paralelo — "abrir os olhos" e "focar a visão" juntos.
+        await Promise.all([
+            this.vrFadeTo(0, CLEAR_DURATION_MS),
+            this.animateWakeHazeClear(CLEAR_DURATION_MS)
+        ]);
+
+        // 10) libera o controle do jogador de volta
+        this._wakeSequenceActive = false;
+    }
+
+    showVRGameOver() {
+        this.vrUI?.show('gameover', {
+            scoreText: `${this.gameState.playerName} · ${String(this.gameState.score).padStart(3, '0')} PTS`
+        });
+    }
+
+    showVREnd() {
+        const mins = Math.floor(this.gameState.elapsedSeconds / 60);
+        const secs = Math.floor(this.gameState.elapsedSeconds % 60);
+        this.vrUI?.show('end', {
+            statsText: `${this.gameState.playerName}\nPONTOS: ${this.gameState.score}\nTEMPO: ${mins}:${String(secs).padStart(2, '0')}`
+        });
+    }
+
     async completePortalRun() {
         if (this.gameState.state === 'GAMEOVER' || this.gameState.state === 'COMPLETED') {
             return;
         }
         this.gameState.setState('COMPLETED');
         this.transitioning = true;
-        try { this.audio.stopAll(); } catch {}
+        const inXR = this.renderer.xr.isPresenting;
+        try { this.audio.stopAll(); } catch { }
         this.scoreManager.award('escape');
         this.input.clearActions();
-        document.exitPointerLock();
+        if (!inXR) document.exitPointerLock();
 
-        await this.ui.fadeIn(900);
+
         this.hud.hide();
-        this.ui.fadeOut(500);
-        await this.endScreen.showLevelIntro(2200);
-        this.endScreen.show({
-            playerName: this.gameState.playerName,
-            score: this.gameState.score,
-            durationSeconds: this.gameState.elapsedSeconds
-        });
-        this.ui.fadeOut();
+        if (inXR) {
+            this.showVREnd();
+        } else {
+            this.ui.fadeOut(500);
+            await this.endScreen.showLevelIntro(
+                { title: 'VOCÊ ACORDA', subtitle: 'DE VOLTA À REALIDADE. QUANTO TEMPO REALMENTE SE PASSOU?' },
+                3200
+            );
+            this.endScreen.show({
+                playerName: this.gameState.playerName,
+                score: this.gameState.score,
+                durationSeconds: this.gameState.elapsedSeconds
+            });
+            this.ui.fadeOut();
+        }
 
         this.repository.saveResult({
             playerName: this.gameState.playerName,
             score: this.gameState.score,
             duration: Math.round(this.gameState.elapsedSeconds),
-            completedAt: new Date().toISOString()
+            completedAt: new Date().toISOString(),
+            levelName: CONFIG.levels.names[this.gameState.currentLevelIndex] ?? 'CHÃO 0',
+            completed: true
         });
     }
 
@@ -752,26 +1487,51 @@ export class Game {
         }
         this.gameState.setState('GAMEOVER');
         this.input.clearActions();
-        document.exitPointerLock();
+        const inXR = this.renderer.xr.isPresenting;
+        if (!inXR) document.exitPointerLock();
 
-        try { this.audio.stopAll(); } catch {}
+        try { this.audio.stopAll(); } catch { }
         this.audio.sfx('denied');
         // para ruído de proximidade e liga chuvisco total de game over
         this.proximityStatic.stop();
-        this.staticEffect.start();
-        await this.ui.fadeIn(700);
-        this.hud.hide();
-        document.getElementById('go-player').textContent = this.gameState.playerName;
-        document.getElementById('go-score').textContent = String(this.gameState.score).padStart(3, '0');
-        document.getElementById('game-over-screen').classList.remove('hidden');
-        this.ui.fadeOut(300);
+        if (inXR) {
+            // Sequência VR: static forte CURTA (~0.6s) → fade escuro → painel.
+            // Sem static intensa prolongada; haptics opcional na captura.
+            try { this.haptics?.capture?.(); } catch { }
+            this.vrEffects?.setProximityIntensity(0);
+            this.vrEffects?.setChaseBoost?.(false);
+            this.vrEffects?.setStaticIntensity(1);
+            await new Promise((r) => setTimeout(r, 600));
+            this.vrEffects?.setStaticIntensity(0);
+            await this.vrEffects?.fadeTo(1, 450);
+            this.hud.hide();
+            this.showVRGameOver();
+            this.vrEffects?.fadeTo(0, 600);
+        } else {
+            this.staticEffect.start();
+            await this.ui.fadeIn(700);
+            this.hud.hide();
+            document.getElementById('go-player').textContent = this.gameState.playerName;
+            document.getElementById('go-score').textContent = String(this.gameState.score).padStart(3, '0');
+            document.getElementById('game-over-screen').classList.remove('hidden');
+            this.ui.fadeOut(300);
+        }
+
+        this.repository.saveResult({
+            playerName: this.gameState.playerName,
+            score: this.gameState.score,
+            duration: Math.round(this.gameState.elapsedSeconds),
+            completedAt: new Date().toISOString(),
+            levelName: CONFIG.levels.names[this.levelIndex] ?? 'CHÃO 0',
+            completed: false
+        });
     }
 
     requestPointerLock() {
         const el = this.renderer?.domElement;
         if (!el || typeof el.requestPointerLock !== 'function') return;
         // Garante foco antes de travar (alguns browsers exigem)
-        try { el.focus?.(); } catch {}
+        try { el.focus?.(); } catch { }
         const result = el.requestPointerLock();
         if (result && typeof result.catch === 'function') {
             result.catch((err) => {
@@ -794,6 +1554,9 @@ export class Game {
             // em VR o pause 3D já foi tratado em pause()/resume()
             return;
         }
+        // Transição XR pendente: a perda de pointerlock ao clicar ENTER VR
+        // NÃO pode pausar o jogo (race sessionstart vs pointerlockchange).
+        if (this._xrEntryPending) return;
         // Se o lock foi adquirido, esconde pausa caso estivesse visível
         if (document.pointerLockElement !== null) {
             if (this.gameState.state === 'PAUSED') {
@@ -817,81 +1580,148 @@ export class Game {
     }
 
     pause() {
+        if (this.gameState.state !== 'PLAYING') return;
         this.gameState.setState('PAUSED');
         this.input.clearActions();
         if (this.renderer.xr.isPresenting) {
-            this._setVRMenuVisible(true, 'PAUSADO\n\nGatilho = interagir [E]\nX = lanterna  A = celular\nMova mãos para andar');
+            this.vrUI?.show('pause', { sessionTimeSec: this.xrSessionPlayTime });
         } else {
             this.ui.showPause();
         }
-        try { this.audio.context?.suspend?.(); } catch {}
+        try { this.audio.context?.suspend?.(); } catch { }
     }
 
     resume() {
+        if (this.gameState.state !== 'PAUSED') {
+            // sessionstart pode chamar resume conceitual quando já PLAYING
+            if (this.renderer.xr.isPresenting) this.vrUI?.show('playing');
+            return;
+        }
         this.gameState.setState('PLAYING');
         this._lastPlayStart = performance.now();
-        try { this.audio.context?.resume?.(); } catch {}
+        try { this.audio.context?.resume?.(); } catch { }
+        try { this.audio.resume?.(); } catch { }
         if (this.renderer.xr.isPresenting) {
-            this._setVRMenuVisible(false, '');
+            this.vrUI?.show('playing');
+            this._syncVRHUD();
         } else {
+            this.ui.hidePause();
             if (!this.renderer.xr.isPresenting) this.requestPointerLock();
         }
     }
 
     restart() {
+        const inXR = this.renderer.xr.isPresenting;
+        if (inXR) this.vrEffects?.fadeTo(1, 350);
         this.staticEffect.stop();
         this.proximityStatic.stop();
+        this.vrEffects?.setStaticIntensity(0);
+        this.vrEffects?.setProximityIntensity(0);
         this.cleanupRun();
         this.transitioning = false;
         this.endScreen.hide();
         document.getElementById('game-over-screen')?.classList.add('hidden');
         this.ui.hidePause();
         this.notificationSystem.clear();
-        this.gameState.reset();
+        // preserve checkpoint so restart resumes at highest reached level
+        this.gameState.reset(true);
         this.objectiveManager.reset();
         this.hud.reset();
         this.hud.setDifficulty(this.difficulty);
+
+        // show checkpoint in HUD
+        try { this.hud.setCheckpoint(this.gameState.checkpointLevelIndex ?? 0); } catch { }
         this.gameState.setState('PLAYING');
+        this._realPause = false;
         this._lastPlayStart = performance.now();
         this.hud.show();
         this.loadLevel();
-        if (!this.renderer.xr.isPresenting) this.requestPointerLock();
+        this._attachXRDevices();
+        if (this.player) {
+            const p = this.player.getPosition();
+            this.xrRig.position.set(inXR ? p.x : 0, 0, inXR ? p.z : 0);
+        }
+        if (inXR) {
+            this.vrUI?.show('playing');
+            this._syncVRHUD();
+            this.vrEffects?.fadeTo(0, 500);
+        } else {
+            this.requestPointerLock();
+        }
     }
 
     backToMenu() {
+        const inXR = this.renderer.xr.isPresenting;
         this.staticEffect.stop();
         this.proximityStatic.stop();
+        this.vrEffects?.stopAll();
         this.cleanupRun();
         this.transitioning = false;
+        this._realPause = false;
         this.endScreen.hide();
         document.getElementById('game-over-screen')?.classList.add('hidden');
         this.ui.hidePause();
         this.notificationSystem.clear();
-        this.gameState.reset();
+        // keep the highest reached floor when returning to the menu after death
+        this.gameState.reset(true);
         this.objectiveManager.reset();
         this.hud.reset();
         this.hud.setDifficulty(null);
         this.hud.hide();
         this.resetFog();
         this.gameState.setState('MENU');
-        this.mainMenu.show();
+        if (inXR) {
+            // Permanece na sessão XR com o menu principal 3D.
+            this.mainMenu.hide();
+            this.vrUI?.show('main', {
+                playerName: this.resolveVRPlayerName(),
+                levelName: CONFIG.levels.names[this.gameState.currentLevelIndex] ?? 'CHÃO 0'
+            });
+        } else {
+            this.mainMenu.show();
+        }
     }
 
-    animate() {
+    animate(timestamp) {
+        this.clock.update(timestamp);
         const delta = Math.min(this.clock.getDelta(), 0.05);
-        const time = this.clock.elapsedTime;
+        const time = this.clock.getElapsed();
+        const inXR = this.renderer.xr.isPresenting;
+
+        // Input XR NUNCA é suspenso: pause/menu/gameover precisam de resume,
+        // navegação, trigger-select e tracking contínuo. Só a locomoção do
+        // player e o gameplay ficam bloqueados fora de PLAYING.
+        if (inXR) {
+            try { this.input.updateXR(delta); } catch (err) { console.warn('[Game] input XR falhou', err); }
+            try { this._attachXRDevicesLazy(); } catch { }
+        }
 
         const playing = this.gameState.state === 'PLAYING';
         if (playing) {
             this.gameState.elapsedSeconds += delta;
-            this.input.updateXR(delta);
+            if (!inXR) {
+                try { this.input.updateXR(delta); } catch { }
+            }
             try {
-                this.player.update(delta, !this.nokiaPhone?.isOpen);
-                this.level.setPlayerPosition(this.player.getPosition());
+                if (!this._wakeCameraTest && !this._wakeSequenceActive) {
+                    this.player.update(delta, !this.nokiaPhone?.isOpen);
+                    this.level.setPlayerPosition(this.player.getPosition());
+                }
             } catch (err) {
                 console.warn('[Game] player.update falhou', err);
             }
-            try { this.interactionSystem.update(); } catch (err) { console.warn('[Game] interactionSystem.update falhou', err); }
+            try {
+                if (inXR) {
+                    const right = this.input.xrSources.right?.controller ?? null;
+                    this.interactionSystem.update(right);
+                    this._syncVRLaser();
+                    // Prompt 3D no HUD VR (DOM invisível no headset).
+                    const prompt = this.interactionSystem.currentTarget?.getPrompt?.() ?? null;
+                    this.vrUI?.setHUD({ prompt: prompt ?? '' });
+                } else {
+                    this.interactionSystem.update();
+                }
+            } catch (err) { console.warn('[Game] interactionSystem.update falhou', err); }
             if (this.level.updateAmbientEvents) {
                 try { this.level.updateAmbientEvents(delta, time); } catch (err) { console.warn('[Game] ambientEvents falhou', err); }
             }
@@ -899,35 +1729,115 @@ export class Game {
                 try { this.entityManager.update(delta, time, () => this.gameOver()); } catch (err) { console.warn('[Game] entityManager.update falhou', err); }
                 try { this.updateProximityNoise(); } catch (err) { console.warn('[Game] proximity update falhou', err); }
             } else {
-                try { this.proximityStatic.setIntensity(0); } catch {}
+                try { this.proximityStatic.setIntensity(0); } catch { }
+                try { this.vrEffects?.setProximityIntensity(0); } catch { }
             }
             if (this.flashlight) {
                 try { this.flashlight.update(delta, time); } catch (err) { console.warn('[Game] flashlight.update falhou', err); }
                 try { this.updateDynamicFog(delta, time); } catch (err) { console.warn('[Game] dynamic fog falhou', err); }
             } else {
-                try { this.updateDynamicFog(delta, time); } catch {}
+                try { this.updateDynamicFog(delta, time); } catch { }
             }
             if (this.nokiaPhone?.update) {
-                try { this.nokiaPhone.update(delta, time); } catch {}
+                try { this.nokiaPhone.update(delta, time); } catch { }
             }
-            try { this.audio.updateListener(this.camera); } catch {}
+            // Listener acompanha a pose world real do headset em XR.
+            try {
+                if (inXR) {
+                    const xrCam = this.renderer.xr.getCamera?.(this.camera) ?? this.camera;
+                    this.audio.updateListener(xrCam);
+                } else {
+                    this.audio.updateListener(this.camera);
+                }
+            } catch { }
 
             if (this.gameState.hasItem('phone')) {
                 this.phoneTimer += delta;
                 if (this.phoneTimer > 18) {
                     this.phoneTimer = 0;
-                    try { this.sendPhoneMessage(); } catch {}
+                    try { this.sendPhoneMessage(); } catch { }
                 }
             }
             try { this.hud.updateMinimap(this.player.getPosition(), this.player.controller.yaw); } catch (err) { console.warn('[Game] minimap update falhou', err); }
-            // passos do jogador -> sfx footstep por superfície
+            // passos do jogador -> sfx footstep por superfície (grip conta como movimento)
             try {
-                const moving = ['forward', 'backward', 'left', 'right']
+                const keysMoving = ['forward', 'backward', 'left', 'right']
                     .some((action) => this.input.isActionActive(action));
+                const xrMove = this.input.getXRMoveInput?.() ?? { x: 0, z: 0 };
+                const xrMoving = Math.hypot(xrMove.x, xrMove.z) > 0.12;
                 const sprint = this.input.isActionActive('run') || this.input.isXRSprinting();
                 const surface = this.level?.footstepSurface || 'carpet';
-                if (moving && this.gameState.state === 'PLAYING') this.audio.playFootstep(sprint, surface);
-            } catch {}
+                if ((keysMoving || (inXR && xrMoving)) && this.gameState.state === 'PLAYING') this.audio.playFootstep(sprint, surface);
+            } catch { }
+            // Comfort XR por frame: vignette dirigida pela VELOCIDADE REAL
+            // (currentVelocity), sessão local e HUD minimal em sprint/chase.
+            // Head tracking nunca é tocado — só locomotion artificial.
+            if (inXR) {
+                try { this.xrSessionPlayTime += delta; } catch { }
+                try {
+                    const eff = this.comfort.getEffectiveConfig();
+                    const speed = this.player?.getSpeed?.() ?? 0;
+                    const top = Math.max(0.5, eff.sprintSpeed || 3.4);
+                    const norm = Math.max(0, Math.min(1, speed / top));
+                    this.vrEffects?.setLocomotionVignette?.(norm, eff.vignetteStrength, eff.vignette);
+                    const sprinting = !!this.input?.isXRSprinting?.();
+                    const chasing = !!this._wasHunt;
+                    this.vrUI?.setHUD?.({ minimal: sprinting || chasing });
+                } catch { }
+            }
+        } else if (inXR) {
+            // Fora de PLAYING mas em XR: mantém HUD/menus/efeitos vivos sem
+            // suspender o animation loop nem o polling dos controllers.
+            try {
+                if (this.vrUI?.isMenuOpen) {
+                    const right = this.input.xrSources.right?.controller ?? null;
+                    const left = this.input.xrSources.left?.controller ?? null;
+                    const rightHit = this.vrUI.updatePointer(right);
+                    if (!rightHit) this.vrUI.updatePointer(left);
+                }
+                this.vrUI?.update(time);
+                this.vrEffects?.update(time, delta);
+            } catch { }
+        }
+
+        if (inXR) {
+            try {
+                this.vrEffects?.update(time, delta);
+                // Performance = conforto: monitor leve + qualidade adaptativa
+                // SÓ de cosméticos (nunca collision/AI/input/tracking).
+                try {
+                    const prev = this.perfMonitor.level;
+                    const lvl = this.perfMonitor.update(delta);
+                    if (lvl !== prev) this._applyPerfLevel(lvl);
+                } catch { }
+                // Throttle extra do HUD em nível mínimo (CanvasTexture).
+                this._perfHudTick = (this._perfHudTick ?? 0) + 1;
+                const hudEvery = this.perfMonitor.level >= 2 ? 2 : 1;
+                if (this._perfHudTick % hudEvery === 0) this.vrUI?.update(time);
+                if (CONFIG.xr?.debugInput === true && this.vrUI?.mode === 'playing') {
+                    const dbg = this.input.getXRDebugState?.();
+                    if (dbg) {
+                        const fmt = (s) => s ? `grip:${s.grip ? 1 : 0} trig:${s.trigger ? 1 : 0} st:(${s.stick.x.toFixed(2)},${s.stick.y.toFixed(2)})` : '—';
+                        this.vrUI.setHUD({ debug: `L ${fmt(dbg.left)}\nR ${fmt(dbg.right)}\nmove:(${dbg.move.x.toFixed(2)},${dbg.move.z.toFixed(2)}) sprint:${dbg.sprinting ? 1 : 0}` });
+                    }
+                }
+                if (CONFIG.xr?.debugComfort === true && this.vrUI?.mode === 'playing') {
+                    try {
+                        const eff = this.comfort.getEffectiveConfig();
+                        const stats = this.perfMonitor.getStats?.() ?? {};
+                        const prox = this.vrEffects?.proximity ?? 0;
+                        const vig = this.vrEffects?.comfortVignette ?? 0;
+                        const spd = this.player?.getSpeed?.() ?? 0;
+                        const tgt = Math.hypot(
+                            this.player?.movement?.targetVelocity?.x ?? 0,
+                            this.player?.movement?.targetVelocity?.z ?? 0
+                        );
+                        this.vrUI.setHUD({
+                            debugComfort: `profile:${eff.profileName} loco:${eff.locomotionMode}\nspd:${spd.toFixed(2)} tgt:${tgt.toFixed(2)} vig:${vig.toFixed(2)}\nframe:${(stats.avgMs ?? 0).toFixed(1)}ms worst:${(stats.worstMs ?? 0).toFixed(1)}ms\nprox:${prox.toFixed(2)} flick:${eff.flickerScale}`
+                        });
+                    } catch { }
+                }
+            } catch { }
         }
 
         if (this.level) {
@@ -935,6 +1845,32 @@ export class Game {
         }
 
         try { this.retroRenderer.render(this.scene, this.camera, time); } catch (err) { console.warn('[Game] render falhou', err); }
+    }
+
+    // Qualidade adaptativa: degrada SÓ cosméticos, com hysteresis/cooldown
+    // no monitor (sem oscilação). Ordem: partículas do portal → proximity →
+    // CanvasTexture do HUD. Nunca collision/AI/input/head tracking.
+    _applyPerfLevel(level) {
+        try {
+            const base = this.comfort?.getEffectiveConfig?.().effectsScale ?? 1;
+            const scale = level === 0 ? base : level === 1 ? Math.min(base, 0.6) : 0.35;
+            this.vrEffects?.setEffectsScale(scale);
+        } catch { }
+        try {
+            if (this.level?.portal?.particles) this.level.portal.particles.visible = level < 2;
+        } catch { }
+    }
+
+    _attachXRDevicesLazy() {
+        // Controllers podem conectar depois de sessionstart; garante anexo.
+        const left = this.input.xrSources.left?.controller ?? null;
+        const right = this.input.xrSources.right?.controller ?? null;
+        if (left && this.nokiaPhone && this.nokiaPhone.xrController !== left) {
+            try { this.nokiaPhone.setXRController(left); } catch { }
+        }
+        if (right && this.flashlight && this.flashlight.xrController !== right) {
+            try { this.flashlight.setXRController(right); } catch { }
+        }
     }
 
     updateDynamicFog(delta, time) {
@@ -956,9 +1892,16 @@ export class Game {
     updateProximityNoise() {
         if (!this.entityManager || !this.proximityStatic) return;
         const entities = this.entityManager.entities;
-        if (!entities || entities.length === 0) { this.proximityStatic.setIntensity(0); return; }
+        if (!entities || entities.length === 0) {
+            this.proximityStatic.setIntensity(0);
+            try { this.vrEffects?.setProximityIntensity(0); } catch { }
+            return;
+        }
         const level = this.level;
-        const playerPos = this.player?.getPosition() ?? this.playerPosRef;
+        // Em XR usa a cabeça real (room-scale); no desktop, movement.position.
+        const playerPos = this.renderer.xr.isPresenting
+            ? this.getXRPlayerWorldPosition(new THREE.Vector3())
+            : (this.player?.getPosition() ?? this.playerPosRef);
         // distância pelo corredor (BFS) — não atravessa paredes
         const pathDistFor = (entity) => {
             try {
@@ -980,7 +1923,7 @@ export class Game {
                     if (cur.x === pCell.x && cur.z === pCell.z) {
                         return cur.d * CONFIG.game.cellSize;
                     }
-                    for (const [dx, dz] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+                    for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
                         const nx = cur.x + dx, nz = cur.z + dz;
                         const key = `${nx},${nz}`;
                         if (nx < 0 || nz < 0 || nx >= cols || nz >= rows) continue;
@@ -1015,11 +1958,17 @@ export class Game {
             isHunt = entities.some(e => e.state === 'CHASING' || e.state === 'STALKING');
             huntEntity = entities.find(e => e.state === 'CHASING' || e.state === 'STALKING');
             if (isHunt) t = Math.min(1, t * 1.15 + 0.08);
-        } catch {}
+        } catch { }
         if (entities.every(e => e.state === 'GONE' || e.state === 'IDLE_HIDDEN') && minDist > maxDist * 0.75) t *= 0.5;
         if (minDist > maxDist * 0.9) t *= 0.25;
         this.proximityStatic.setIntensity(t);
-        try { this.audio.setProximityIntensity(t); } catch {}
+        // Mesmo t controla o overlay stereo-safe no headset, com curva XR
+        // distinta (pow 1.5 × profileStrength) — desktop intacto.
+        try {
+            const visual = this.comfort?.getEffectiveConfig?.().proximityVisualStrength;
+            this.vrEffects?.setProximityIntensity(t, visual);
+        } catch { }
+        try { this.audio.setProximityIntensity(t); } catch { }
         // chase layer: heartbeat + growl + ducking
         try {
             const wasHunt = this._wasHunt || false;
@@ -1029,12 +1978,16 @@ export class Game {
                     this.audio.playEntityGrowl(pos, t);
                     this.audio.startHeartbeat();
                     this.audio.duckBus('ambient', 0.62, 0.5);
+                    // Comfort: vignette extra pequena no chase + haptic sutil.
+                    try { this.vrEffects?.setChaseBoost?.(true); } catch { }
+                    try { this.haptics?.chaseStart?.(); } catch { }
                 }
                 this.audio.updateHeartbeatRate(t);
                 if (huntEntity && Math.random() < 0.07) this.audio.playEntityBreathAsset(huntEntity.group.position, t);
             } else if (wasHunt && !isHunt) {
                 this.audio.stopHeartbeat(1.4);
                 this.audio.setBusVolume('ambient', 1, 1.2);
+                try { this.vrEffects?.setChaseBoost?.(false); } catch { }
             }
             // vanish detect
             for (const e of entities) {
@@ -1045,7 +1998,7 @@ export class Game {
                 e._prevStateForAudio = e.state;
             }
             this._wasHunt = isHunt;
-        } catch {}
+        } catch { }
     }
 
     onResize() {

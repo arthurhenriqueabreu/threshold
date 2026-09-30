@@ -31,6 +31,25 @@ vec4 retroSnapPosition(vec4 clipPos) {
 }
 `;
 
+// Grade de cor estável por fragmento. Em XR ela substitui a etapa de gamma +
+// quantização do post-process desktop sem depender de gl_FragCoord: o mesmo
+// material produz a mesma resposta de iluminação nos dois olhos, evitando um
+// dither diferente por view.
+const FRAGMENT_GRADE_FN = /* glsl */ `
+uniform float uRetroGamma;
+uniform float uRetroQuantizeStrength;
+uniform float uRetroQuantizeLevels;
+
+vec3 retroGradeColor(vec3 color) {
+    if (uRetroGamma > 0.0 && abs(uRetroGamma - 1.0) > 0.001) {
+        color = pow(max(color, vec3(0.0)), vec3(uRetroGamma));
+    }
+    float levels = max(2.0, uRetroQuantizeLevels);
+    vec3 quantized = floor(max(color, vec3(0.0)) * levels + 0.5) / levels;
+    return mix(color, quantized, clamp(uRetroQuantizeStrength, 0.0, 1.0));
+}
+`;
+
 // Statement inserido dentro do main(): preserva a atribuição padrão
 // "gl_Position = projectionMatrix * mvPosition;" e, logo em seguida, aplica o
 // vertex snapping sobre o clip position JÁ computado. NÃO substitui/descarta a
@@ -41,9 +60,11 @@ vec4 retroSnapPosition(vec4 clipPos) {
 const SNAP_CALL =
     `gl_Position = projectionMatrix * mvPosition;\n` +
     `gl_Position = retroSnapPosition(gl_Position);`;
+const GRADE_CALL = 'gl_FragColor.rgb = retroGradeColor(gl_FragColor.rgb);';
 
 const affineKey = '__retroAffine';
 const snapKey = '__retroSnap';
+const colorKey = '__retroColorQuantize';
 
 // Registro global opcional de handles instalados, para que o RetroRenderer
 // possa atualizar uniforms de materiais criados em qualquer arquivo (Level0,
@@ -103,6 +124,40 @@ function installVertexSnap(shader, handle) {
     shader.vertexShader = src;
 }
 
+function installFragmentQuantize(shader, handle) {
+    const uniforms = getAllUniforms(shader);
+    if (!uniforms.uRetroQuantizeStrength) {
+        Object.assign(uniforms, {
+            uRetroGamma: handle.colorUniforms.uRetroGamma,
+            uRetroQuantizeStrength: handle.colorUniforms.uRetroQuantizeStrength,
+            uRetroQuantizeLevels: handle.colorUniforms.uRetroQuantizeLevels
+        });
+    }
+
+    let src = shader.fragmentShader;
+    if (src.indexOf('retroGradeColor') === -1) {
+        src = FRAGMENT_GRADE_FN + '\n' + src;
+    }
+
+    if (src.indexOf(GRADE_CALL) === -1) {
+        const colorspaceMarker = '#include <colorspace_fragment>';
+        if (src.indexOf(colorspaceMarker) !== -1) {
+            // O desktop recebe a cena linear no render target e só então
+            // aplica gamma/quantização no post. Inserir antes do colorspace
+            // reproduz essa curva no XR sem mexer na conversão SRGB do
+            // framebuffer stereo.
+            src = src.replace(colorspaceMarker, `${GRADE_CALL}\n${colorspaceMarker}`);
+        } else {
+            const idx = src.lastIndexOf('}');
+            if (idx !== -1) {
+                src = src.slice(0, idx) + GRADE_CALL + '\n}' + src.slice(idx + 1);
+            }
+        }
+    }
+
+    shader.fragmentShader = src;
+}
+
 function installAffine(shader, handle) {
     const uniforms = getAllUniforms(shader);
     if (!uniforms.uRetroAffineStrength) {
@@ -149,12 +204,16 @@ function needsRetro(material) {
     return !(material.isShaderMaterial || material.isRawShaderMaterial);
 }
 
-export function installRetroVertexHooks(material, { snapping = true, affine = true } = {}) {
+export function installRetroVertexHooks(material, { snapping = true, affine = true, quantize = true } = {}) {
     if (!needsRetro(material)) return null;
 
     const key = material;
-    if (key[snapKey] !== undefined && key[affineKey] !== undefined) {
-        return { snapUniforms: key[snapKey], affineUniforms: key[affineKey] };
+    if (key[snapKey] !== undefined && key[affineKey] !== undefined && key[colorKey] !== undefined) {
+        return {
+            snapUniforms: key[snapKey],
+            affineUniforms: key[affineKey],
+            colorUniforms: key[colorKey]
+        };
     }
 
     const snapUniforms = snapping
@@ -169,10 +228,21 @@ export function installRetroVertexHooks(material, { snapping = true, affine = tr
         ? { uRetroAffineStrength: { value: CONFIG.retro.affineStrength }, uRetroAffineW: { value: 1 } }
         : null;
 
-    const handle = { snapUniforms, affineUniforms };
+    const colorUniforms = quantize
+        ? {
+              uRetroGamma: { value: 1 },
+              uRetroQuantizeStrength: { value: 0 },
+              uRetroQuantizeLevels: { value: Math.pow(2, CONFIG.retro.colorBits) - 1 }
+          }
+        : null;
+
+    const handle = { snapUniforms, affineUniforms, colorUniforms };
     registerRetroHandle(handle);
-    if (snapping) key[snapKey] = snapUniforms;
-    if (affine) key[affineKey] = affineUniforms;
+    // Guarda também os recursos desativados como null, evitando reinstalar o
+    // callback quando o mesmo material é configurado mais de uma vez.
+    key[snapKey] = snapUniforms;
+    key[affineKey] = affineUniforms;
+    key[colorKey] = colorUniforms;
 
     // Preserve o callback anterior de onBeforeCompile mantendo corretamente o
     // contexto `this` do material (função declarada normal, com .call(this)).
@@ -183,6 +253,9 @@ export function installRetroVertexHooks(material, { snapping = true, affine = tr
         }
         if (affineUniforms) {
             installAffine(shader, handle);
+        }
+        if (colorUniforms) {
+            installFragmentQuantize(shader, handle);
         }
         if (previousOnBeforeCompile) {
             previousOnBeforeCompile.call(this, shader, renderer);
@@ -195,7 +268,7 @@ export function installRetroVertexHooks(material, { snapping = true, affine = tr
     const previousCacheKey = material.customProgramCacheKey;
     material.customProgramCacheKey = function () {
         const base = previousCacheKey.call(this);
-        return `${base}|retro${snapping ? 's' : ''}${affine ? 'a' : ''}`;
+        return `${base}|retro${snapping ? 's' : ''}${affine ? 'a' : ''}${quantize ? 'q' : ''}`;
     };
 
     return handle;
@@ -213,6 +286,7 @@ export function configureRetroMaterial(material, mesh, options = {}) {
     const opts = {
         snapping: CONFIG.retro.vertexSnapping,
         affine: CONFIG.retro.affineMapping,
+        quantize: CONFIG.retro.colorQuantization,
         flat: CONFIG.retro.flatShading,
         ...options
     };
@@ -226,7 +300,8 @@ export function configureRetroMaterial(material, mesh, options = {}) {
 
     const hooks = installRetroVertexHooks(material, {
         snapping: opts.snapping && CONFIG.retro.vertexSnapping,
-        affine: opts.affine && CONFIG.retro.affineMapping
+        affine: opts.affine && CONFIG.retro.affineMapping,
+        quantize: opts.quantize && CONFIG.retro.colorQuantization
     });
 
     return { material, hooks };
@@ -248,6 +323,13 @@ export function collectRetroUniforms(handle) {
         out.push(
             { uniform: handle.affineUniforms.uRetroAffineStrength, kind: 'affineStrength' },
             { uniform: handle.affineUniforms.uRetroAffineW, kind: 'affineW' }
+        );
+    }
+    if (handle && handle.colorUniforms) {
+        out.push(
+            { uniform: handle.colorUniforms.uRetroGamma, kind: 'colorGradeGamma' },
+            { uniform: handle.colorUniforms.uRetroQuantizeStrength, kind: 'quantizeStrength' },
+            { uniform: handle.colorUniforms.uRetroQuantizeLevels, kind: 'quantizeLevels' }
         );
     }
     return out;

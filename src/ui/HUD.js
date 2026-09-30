@@ -1,4 +1,5 @@
 import { eventBus } from '../core/EventBus.js';
+import { CONFIG } from '../core/Config.js';
 import { Minimap } from './Minimap.js';
 
 export class HUD {
@@ -9,6 +10,14 @@ export class HUD {
 
         this.levelElement = document.getElementById('hud-level');
         this.levelName = document.getElementById('hud-level-name');
+        // checkpoint indicator (created dynamically if not present in DOM)
+        this.checkpointElement = document.getElementById('hud-checkpoint');
+        if (!this.checkpointElement && this.levelElement) {
+            this.checkpointElement = document.createElement('p');
+            this.checkpointElement.id = 'hud-checkpoint';
+            this.checkpointElement.className = 'hud-checkpoint';
+            this.levelElement.appendChild(this.checkpointElement);
+        }
 
         this.radarItem = document.getElementById('item-radar');
         this.phoneItem = document.getElementById('item-phone');
@@ -27,6 +36,7 @@ export class HUD {
         this.difficulty = null;
         this.radarEnabled = false;
         this.phoneEnabled = false;
+        this.flashlightAvailable = false;
         this.lastObjectives = [
             { id: 'fuse', title: 'Encontrar fusível', completed: false },
             { id: 'keycard', title: 'Encontrar cartão', completed: false },
@@ -47,6 +57,11 @@ export class HUD {
             this.renderObjectives(objectives);
             this.renderLegend();
         });
+        eventBus.on('inventory:changed', () => {
+            // re-render required items display when inventory changes
+            this.renderRequiredItems();
+            if (this.minimap) this.minimap.update(this._lastPlayerPos, this._lastYaw);
+        });
         eventBus.on('score:changed', (score) => this.setScore(score));
         eventBus.on('portal:unlocked', () => {
             this._portalUnlocked = true;
@@ -66,6 +81,29 @@ export class HUD {
 
         this.renderObjectives(this.lastObjectives);
         this.renderLegend();
+    }
+
+    setRequiredItems(list, gameState) {
+        this._requiredItems = list || [];
+        this._requiredGameState = gameState;
+        this.renderRequiredItems();
+    }
+
+    renderRequiredItems() {
+        if (!this._requiredItems || !this.checkpointElement) return;
+        // show as "REQUERe: ITEM (✓)" where ✓ shows collected
+        const parts = this._requiredItems.map((id) => {
+            const label = id === 'phone' ? 'CELULAR' : id === 'radar' ? 'RADAR' : id === 'flashlight' ? 'LANTERNA' : id.toUpperCase();
+            const collected = this._requiredGameState?.hasItem ? this._requiredGameState.hasItem(id) : false;
+            return `${label}${collected ? ' ✓' : ''}`;
+        });
+        if (parts.length === 0) {
+            this.checkpointElement.textContent = '';
+            this.checkpointElement.classList.add('hidden');
+            return;
+        }
+        this.checkpointElement.textContent = `REQUIRED: ${parts.join(' + ')}`;
+        this.checkpointElement.classList.remove('hidden');
     }
 
     renderObjectives(objectives) {
@@ -120,6 +158,7 @@ export class HUD {
         this._lastYaw = 0;
         this.radarEnabled = false;
         this.phoneEnabled = false;
+        this.flashlightAvailable = false;
         this.setRadarEnabled(false);
         this.setPhoneEnabled(false);
         this.setItemOn('flashlight', false);
@@ -137,9 +176,11 @@ export class HUD {
 
     setDifficulty(difficulty) {
         this.difficulty = difficulty;
-        if (difficulty === 'easy') {
-            this.radarEnabled = true;
-        }
+        // Precisa resetar explicitamente pros dois lados: antes a dificuldade
+        // nunca mudava no meio do jogo, então isso nunca "vazava" de um nível
+        // fácil pro próximo. Agora que muda por andar, sem isso o minimapa
+        // ficaria preso ligado depois do CHÃO 0.
+        this.radarEnabled = difficulty === 'easy';
         this.updateVisibility();
         this.renderLegend();
     }
@@ -152,6 +193,14 @@ export class HUD {
             if (name) this.levelElement.classList.remove('hidden');
             else this.levelElement.classList.add('hidden');
         }
+    }
+
+    setCheckpoint(levelIndex) {
+        if (!this.checkpointElement) return;
+        const names = CONFIG.levels.names || [];
+        const label = names[levelIndex] ?? `CHÃO ${levelIndex}`;
+        this.checkpointElement.textContent = `CHECKPOINT: ${label}`;
+        this.checkpointElement.classList.remove('hidden');
     }
 
     setRadarEnabled(enabled) {
@@ -173,13 +222,20 @@ export class HUD {
         }
     }
 
-    setItemOn(name, on) {
+    setItemOn(name, on, available = null) {
         const el = name === 'flashlight' ? this.flashlightItem
             : name === 'radar' ? this.radarItem
             : name === 'phone' ? this.phoneItem : null;
         if (!el) return;
         if (name === 'flashlight') {
-            // chip aparece assim que o jogador possui a lanterna; "on" destaca quando acesa
+            if (available !== null) this.flashlightAvailable = !!available;
+            // O chip aparece assim que o jogador possui a lanterna; "on"
+            // apenas destaca quando ela está acesa.
+            if (!this.flashlightAvailable) {
+                el.classList.add('hidden');
+                el.classList.remove('hud-item--on');
+                return;
+            }
             el.classList.remove('hidden');
         }
         if (on) el.classList.add('hud-item--on');

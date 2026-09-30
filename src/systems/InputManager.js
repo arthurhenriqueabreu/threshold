@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { CONFIG } from '../core/Config.js';
 
 const KEY_ACTIONS = {
     KeyW: 'forward',
@@ -13,6 +14,10 @@ const KEY_ACTIONS = {
     ShiftRight: 'run'
 };
 
+function xrCfg() {
+    return CONFIG.xr ?? {};
+}
+
 export class InputManager {
     constructor() {
         this.actions = new Set();
@@ -24,9 +29,23 @@ export class InputManager {
         this.xrMove = { x: 0, z: 0 };
         this.xrSprinting = false;
         this.xrTurnCooldown = 0;
-        // Arm-swing locomotion (mãos como pernas)
+        this.xrTurnArmed = true;
+        this.xrMenuNavArmed = true;
+        this.turnMode = CONFIG.xr?.turnMode === 'snap' ? 'snap' : 'smooth';
+        this.xrConnectedInfo = { left: null, right: null };
+        this._gripSmooth = 0;
+        this._debugThrottle = 0;
+        // Blink step (locomoção alternativa opcional): edge + cooldown.
+        // Só dispara em blink mode; nunca vários por frame segurando o grip.
+        this.locomotionMode = 'continuous';
+        this._blinkPending = false;
+        this._blinkCooldown = 0;
+        this._prevGripLeft = false;
+        this._prevGripRight = false;
+        // Arm-swing locomotion (mãos como pernas) — DESABILITADO por padrão.
+        // Mantido apenas como opção futura via CONFIG.xr.armSwing.
         this._armSwing = {
-            enabled: true,
+            enabled: false,
             prevLeft: new THREE.Vector3(),
             prevRight: new THREE.Vector3(),
             tmpLeft: new THREE.Vector3(),
@@ -102,24 +121,31 @@ export class InputManager {
     registerXRController(controller) {
         controller.addEventListener('connected', (event) => {
             const handedness = event.data?.handedness;
+            const profiles = event.data?.profiles ?? [];
+            const axes = event.data?.gamepad?.axes?.length ?? 0;
+            const buttons = event.data?.gamepad?.buttons?.length ?? 0;
+            // Log UMA VEZ por conexão — nunca por frame.
+            console.log(`[XR] ${handedness} connected profiles: ${JSON.stringify(profiles)} axes: ${axes} buttons: ${buttons}`);
             if (handedness === 'left' || handedness === 'right') {
                 this.xrSources[handedness] = { controller, inputSource: event.data };
+                this.xrConnectedInfo[handedness] = { profiles, axes, buttons };
             }
         });
         controller.addEventListener('disconnected', (event) => {
             const handedness = event.data?.handedness;
             if (handedness === 'left' || handedness === 'right') {
                 this.xrSources[handedness] = null;
+                this.xrConnectedInfo[handedness] = null;
                 for (const key of this.xrButtonStates.keys()) {
                     if (key.startsWith(`${handedness}:`)) this.xrButtonStates.delete(key);
                 }
             }
         });
-        controller.addEventListener('selectstart', () => this.triggerInteract());
+        controller.addEventListener('selectstart', () => this.triggerInteract(controller));
     }
 
-    triggerInteract() {
-        for (const callback of this.interactCallbacks) callback();
+    triggerInteract(controller = null) {
+        for (const callback of this.interactCallbacks) callback(controller);
     }
 
     readXRStick(source) {
@@ -145,16 +171,55 @@ export class InputManager {
         return pressed;
     }
 
+    isXRButtonHeld(handedness, index) {
+        const source = this.xrSources[handedness];
+        const button = source?.inputSource?.gamepad?.buttons?.[index];
+        return !!button?.pressed;
+    }
+
+    isLeftGripHeld() {
+        const idx = xrCfg().buttons?.squeeze ?? 1;
+        return this.isXRButtonHeld('left', idx);
+    }
+
+    isRightGripHeld() {
+        const idx = xrCfg().buttons?.squeeze ?? 1;
+        return this.isXRButtonHeld('right', idx);
+    }
+
+    getXRDebugState() {
+        const btn = xrCfg().buttons ?? {};
+        return {
+            left: this.xrSources.left ? {
+                grip: this.isLeftGripHeld(),
+                trigger: this.isXRButtonHeld('left', btn.trigger ?? 0),
+                stick: this.readXRStick(this.xrSources.left),
+                buttons: this.xrSources.left.inputSource?.gamepad?.buttons?.map(b => !!b?.pressed) ?? []
+            } : null,
+            right: this.xrSources.right ? {
+                grip: this.isRightGripHeld(),
+                trigger: this.isXRButtonHeld('right', btn.trigger ?? 0),
+                stick: this.readXRStick(this.xrSources.right),
+                buttons: this.xrSources.right.inputSource?.gamepad?.buttons?.map(b => !!b?.pressed) ?? []
+            } : null,
+            move: { ...this.xrMove },
+            sprinting: this.xrSprinting
+        };
+    }
+
     updateXR(delta) {
+        const cfg = xrCfg();
         this.xrMove.x = 0;
         this.xrMove.z = 0;
         this.xrSprinting = false;
         this.xrTurnCooldown = Math.max(0, this.xrTurnCooldown - delta);
+        const btn = cfg.buttons ?? { trigger: 0, squeeze: 1, thumbstick: 3, primary: 4, secondary: 5 };
 
-        // --- Arm-swing: calcula velocidade das mãos ---
+        // --- Arm-swing (opcional, desligado por padrão) ---
         let armForward = 0;
         let armSprinting = false;
-        if (this._armSwing.enabled && delta > 0 && delta < 0.2) {
+        const armEnabled = cfg.armSwing === true || this._armSwing.enabled === true;
+        if (armEnabled && delta > 0 && delta < 0.2) {
             const leftCtrl = this.xrSources.left?.controller;
             const rightCtrl = this.xrSources.right?.controller;
             if (leftCtrl && rightCtrl) {
@@ -165,32 +230,25 @@ export class InputManager {
                     this._armSwing.prevRight.copy(this._armSwing.tmpRight);
                     this._armSwing.hasPrev = true;
                 } else {
-                    // velocidade m/s
                     this._armSwing.leftVel.subVectors(this._armSwing.tmpLeft, this._armSwing.prevLeft).divideScalar(delta);
                     this._armSwing.rightVel.subVectors(this._armSwing.tmpRight, this._armSwing.prevRight).divideScalar(delta);
                     const lSpeed = this._armSwing.leftVel.length();
                     const rSpeed = this._armSwing.rightVel.length();
-                    // média com decaimento
                     const instantAvg = (lSpeed + rSpeed) * 0.5;
-                    // suavização exponencial
                     this._armSwing.avgSpeed = this._armSwing.avgSpeed * 0.82 + instantAvg * 0.18;
-                    // detecta braços alternados: velocidades em Z opostas indicam caminhada natural
                     const zOpposite = this._armSwing.leftVel.z * this._armSwing.rightVel.z < 0;
                     const bothMoving = lSpeed > 0.25 && rSpeed > 0.25;
                     const swingFactor = (zOpposite && bothMoving) ? 1.18 : 0.72;
                     const effective = this._armSwing.avgSpeed * swingFactor;
                     if (effective > this._armSwingThresholdWalk) {
-                        // mapeia 0.45→0 até 2.2→1
                         const t = Math.min(1, (effective - this._armSwingThresholdWalk) / 1.55);
-                        armForward = t; // 0..1
-                        // curva mais agressiva para corrida
+                        armForward = t;
                         if (effective > this._armSwingThresholdRun) {
                             armSprinting = true;
                             armForward = Math.min(1.35, armForward * 1.35);
                         }
                     }
                     this._armSwing.walkIntensity = armForward;
-                    // atualiza prev
                     this._armSwing.prevLeft.copy(this._armSwing.tmpLeft);
                     this._armSwing.prevRight.copy(this._armSwing.tmpRight);
                 }
@@ -198,40 +256,156 @@ export class InputManager {
                 this._armSwing.hasPrev = false;
                 this._armSwing.avgSpeed *= 0.92;
             }
-        } else if (!this._armSwing.enabled) {
+        } else {
             this._armSwing.hasPrev = false;
         }
 
-        // Thumbstick ainda funciona como fallback, mas arm-swing tem prioridade quando detecta caminhada
-        const leftStick = this.readXRStick(this.xrSources.left);
-        if (armForward > 0.08) {
-            // mãos comandam frente/ trás; thumbstick mantém strafe lateral
-            this.xrMove.x = leftStick.x * 0.55;
-            this.xrMove.z = -armForward;
-            this.xrSprinting = armSprinting;
+        // --- GRIP LOCOMOTION (primária): squeeze/grip = andar p/ frente ---
+        // Direção = frente horizontal da cabeça (resolvida no Player.update).
+        // Aqui geramos apenas o input escalar; ambos grips = sprint.
+        let gripForward = 0;
+        let gripSprint = false;
+        if (cfg.gripLocomotion !== false) {
+            const leftGrip = this.pollXRButton('left', btn.squeeze ?? 1, 'grip-left');
+            const rightGrip = this.pollXRButton('right', btn.squeeze ?? 1, 'grip-right');
+            if (leftGrip && rightGrip) {
+                gripForward = 1;
+                gripSprint = true;
+            } else if (leftGrip || rightGrip) {
+                gripForward = 1;
+            }
+            // Aceleração/desaceleração suave ~0.10–0.20s p/ conforto.
+            const rate = delta > 0 ? Math.min(1, delta / 0.15) : 1;
+            this._gripSmooth += ((gripForward > 0 ? 1 : 0) - this._gripSmooth) * rate;
+            if (Math.abs(this._gripSmooth) < 0.01) this._gripSmooth = gripForward > 0 ? Math.max(this._gripSmooth, 0.01) : 0;
         } else {
-            this.xrMove.x = leftStick.x;
-            this.xrMove.z = leftStick.y;
-            const leftSqueeze = this.pollXRButton('left', 1, 'sprint');
-            const rightSqueeze = this.pollXRButton('right', 1, 'sprint');
-            this.xrSprinting = leftSqueeze || rightSqueeze || armSprinting;
+            // ainda faz poll p/ limpar edge states
+            this.pollXRButton('left', btn.squeeze ?? 1, 'grip-left');
+            this.pollXRButton('right', btn.squeeze ?? 1, 'grip-right');
+            this._gripSmooth = 0;
         }
-        this.pollXRButton('left', 4, 'flashlight'); // X on Quest
-        this.pollXRButton('right', 4, 'phone');     // A on Quest
+        const gripMag = this._gripSmooth;
 
+        // --- Thumbstick fallback: strafe + frente/trás ---
+        const leftStick = this.readXRStick(this.xrSources.left);
+        const combinedX = leftStick.x;
+        // stick Y: + = trás, - = frente (padrão). Grip soma frente (-Z).
+        let combinedZ = leftStick.y - gripMag;
+        if (armForward > 0.08) {
+            combinedZ = Math.min(combinedZ, -armForward);
+            this.xrSprinting = armSprinting || gripSprint;
+        } else {
+            this.xrSprinting = gripSprint;
+        }
+        // clamp p/ não exceder magnitude 1.35 (sprint arm-swing legado)
+        this.xrMove.x = Math.max(-1.35, Math.min(1.35, combinedX));
+        this.xrMove.z = Math.max(-1.35, Math.min(1.35, combinedZ));
+
+        // --- Botões de sistema Quest ---
+        // X (left primary=4) = lanterna, A (right primary=4) = celular,
+        // B/Y (secondary=5) = pause/resume.
+        this.pollXRButton('left', btn.primary ?? 4, 'flashlight');
+        this.pollXRButton('right', btn.primary ?? 4, 'phone');
+        this.pollXRButton('left', btn.secondary ?? 5, 'pause');
+        this.pollXRButton('right', btn.secondary ?? 5, 'pause');
+
+        // --- Blink step: GRIP press edge → 1 salto (com cooldown) ---
+        this._blinkCooldown = Math.max(0, this._blinkCooldown - delta);
+        if (this.locomotionMode === 'blink') {
+            const leftGrip = this.isXRButtonHeld('left', btn.squeeze ?? 1);
+            const rightGrip = this.isXRButtonHeld('right', btn.squeeze ?? 1);
+            const edge = (leftGrip && !this._prevGripLeft) || (rightGrip && !this._prevGripRight);
+            if (edge && this._blinkCooldown <= 0 && !this._blinkPending) {
+                this._blinkPending = true;
+                this._blinkCooldown = cfg.blinkStep?.cooldown ?? 0.45;
+            }
+            this._prevGripLeft = leftGrip;
+            this._prevGripRight = rightGrip;
+        } else {
+            this._prevGripLeft = this.isXRButtonHeld('left', btn.squeeze ?? 1);
+            this._prevGripRight = this.isXRButtonHeld('right', btn.squeeze ?? 1);
+        }
+
+        // --- VR menu navigation ---
         const rightStick = this.readXRStick(this.xrSources.right);
-        if (this.xrTurnCooldown <= 0 && Math.abs(rightStick.x) > 0.7) {
-            this.emitXRAction('turn', rightStick.x > 0 ? -1 : 1);
-            this.xrTurnCooldown = 0.28;
+        const navStick = Math.hypot(rightStick.x, rightStick.y) >= Math.hypot(leftStick.x, leftStick.y)
+            ? rightStick
+            : leftStick;
+        const navRelease = cfg.menuStickReleaseThreshold ?? 0.24;
+        const navThreshold = Math.max(navRelease + 0.05, cfg.menuStickThreshold ?? 0.68);
+        const navMagnitude = Math.max(Math.abs(navStick.x), Math.abs(navStick.y));
+        if (navMagnitude <= navRelease) this.xrMenuNavArmed = true;
+        if (this.xrMenuNavArmed && navMagnitude >= navThreshold) {
+            const vertical = Math.abs(navStick.y) >= Math.abs(navStick.x);
+            const direction = vertical
+                ? (navStick.y > 0 ? 1 : -1)
+                : (navStick.x > 0 ? 1 : -1);
+            this.emitXRAction('menu-nav', { direction, axis: vertical ? 'y' : 'x' });
+            this.xrMenuNavArmed = false;
+        }
+
+        // --- Right-stick turning ---
+        if (this.turnMode === 'smooth') {
+            const deadzone = cfg.smoothTurnDeadzone ?? 0.18;
+            const raw = rightStick.x;
+            const abs = Math.abs(raw);
+            if (abs > deadzone) {
+                const normalized = Math.min(1, (abs - deadzone) / Math.max(0.001, 1 - deadzone));
+                const curved = Math.pow(normalized, cfg.smoothTurnExponent ?? 1.35);
+                this.emitXRAction('turn-smooth', { value: Math.sign(raw) * curved, delta });
+            }
+            this.xrTurnArmed = true;
+            this.xrTurnCooldown = 0;
+        } else {
+            const turnRelease = cfg.snapTurnReleaseThreshold ?? 0.22;
+            const turnThreshold = Math.max(turnRelease + 0.05, cfg.snapTurnThreshold ?? 0.70);
+            if (Math.abs(rightStick.x) <= turnRelease) this.xrTurnArmed = true;
+            if (this.xrTurnArmed && this.xrTurnCooldown <= 0 && Math.abs(rightStick.x) > turnThreshold) {
+                this.emitXRAction('turn', rightStick.x > 0 ? -1 : 1);
+                this.xrTurnCooldown = cfg.snapTurnCooldown ?? 0.28;
+                this.xrTurnArmed = false;
+            }
+        }
+
+        // Debug opcional throttled (1x/seg) — nunca por frame no console.
+        if (cfg.debugInput === true) {
+            this._debugThrottle += delta;
+            if (this._debugThrottle > 1.0) {
+                this._debugThrottle = 0;
+                console.log('[XR-debug]', JSON.stringify(this.getXRDebugState()));
+            }
         }
     }
 
     getXRMoveInput() {
+        // Em blink mode não há locomotion contínua — só saltos discretos.
+        if (this.locomotionMode === 'blink') return { x: 0, z: 0 };
         return this.xrMove;
     }
 
     isXRSprinting() {
+        if (this.locomotionMode === 'blink') return false;
         return this.xrSprinting;
+    }
+
+    setLocomotionMode(mode) {
+        this.locomotionMode = mode === 'blink' ? 'blink' : 'continuous';
+        this._blinkPending = false;
+        this._blinkCooldown = 0;
+    }
+
+    setTurnMode(mode) {
+        this.turnMode = mode === 'snap' ? 'snap' : 'smooth';
+        this.xrTurnCooldown = 0;
+        this.xrTurnArmed = true;
+    }
+
+    // Consome 1 pedido de blink (edge). Retorna { distance } ou null.
+    consumeBlinkStep() {
+        if (!this._blinkPending) return null;
+        this._blinkPending = false;
+        const cfg = xrCfg().blinkStep ?? {};
+        return { distance: cfg.distance ?? 1.0 };
     }
 
     isActionActive(action) {
@@ -243,5 +417,11 @@ export class InputManager {
         this.xrMove.x = 0;
         this.xrMove.z = 0;
         this.xrSprinting = false;
+        this._gripSmooth = 0;
+        this.xrTurnCooldown = 0;
+        this.xrTurnArmed = true;
+        this.xrMenuNavArmed = true;
+        this._blinkPending = false;
+        this._blinkCooldown = 0;
     }
 }

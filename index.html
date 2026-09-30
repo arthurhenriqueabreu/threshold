@@ -28,11 +28,37 @@
           <button id="btn-start" class="btn">INICIAR</button>
           <button id="btn-instructions" class="btn btn--secondary">INSTRUÇÕES</button>
         </div>
+        <div id="checkpoint-progress" class="checkpoint-progress">
+          <p class="hud-label">PROGRESSO</p>
+          <p id="checkpoint-progress-value">CHECKPOINT: 0 DE 2</p>
+        </div>
         <footer class="menu-footer">
           <p>ADS SENAC JOINVILLE</p>
           <p>Profª Claudia Werlich</p>
-          <p>Equipe: [preencher posteriormente]</p>
+          <p>Equipe: Arthur, Matheus e Natália</p>
         </footer>
+
+        <!-- Modal seleção de fase -->
+        <div id="level-select-modal" class="modal hidden">
+          <div class="modal-box modal-box--wide">
+            <p class="modal-title">SELECIONE A FASE</p>
+            <div class="level-select-grid">
+              <button class="level-card" data-level="0">
+                <span class="level-card__name">CHÃO 0</span>
+                <span class="level-card__status">Fácil</span>
+              </button>
+              <button class="level-card" data-level="1">
+                <span class="level-card__name">CHÃO 1</span>
+                <span class="level-card__status">Médio</span>
+              </button>
+              <button class="level-card" data-level="2">
+                <span class="level-card__name">CHÃO 2</span>
+                <span class="level-card__status">Difícil</span>
+              </button>
+            </div>
+            <button id="btn-close-level-select" class="btn btn--secondary">VOLTAR</button>
+          </div>
+        </div>
 
         <!-- Modal nome -->
         <div id="name-modal" class="modal hidden">
@@ -49,30 +75,15 @@
           </div>
         </div>
 
-        <!-- Modal dificuldade -->
-        <div id="difficulty-modal" class="modal hidden">
-          <div class="modal-box">
-            <p class="modal-title">SELECIONE A DIFICULDADE</p>
-            <div class="difficulty-options">
-              <button id="diff-easy" class="diff-btn" data-diff="easy">
-                <span class="diff-name">FÁCIL</span>
-                <span class="diff-desc">Minimapa e guia; entidades só observam e desaparecem</span>
-              </button>
-              <button id="diff-normal" class="diff-btn" data-diff="normal">
-                <span class="diff-name">NORMAL</span>
-                <span class="diff-desc">Exige achar radar e celular; entidades perseguem tarde</span>
-              </button>
-              <button id="diff-hard" class="diff-btn" data-diff="hard">
-                <span class="diff-name">DIFÍCIL</span>
-                <span class="diff-desc">Sem radar/celular, mais escuro; exige lanterna; agressivas</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
         <!-- Modal instruções -->
         <div id="instructions-modal" class="modal hidden">
           <div class="modal-box">
+            <p class="modal-title">OBJETIVO</p>
+            <p class="objective-text">
+              Você caiu dos Backrooms — escorregou da realidade sem
+              explicação. Precisa encontrar o caminho de volta, atravessando
+              3 níveis cada vez mais perigosos, até escapar de vez.
+            </p>
             <p class="modal-title">MOVIMENTAÇÃO</p>
             <ul class="controls-list">
               <li><span>WASD</span> mover</li>
@@ -82,7 +93,7 @@
               <li><span>F</span> lanterna</li>
               <li><span>Q</span> celular (quando coletado)</li>
               <li><span>ESC</span> liberar cursor</li>
-              <li><span>VR</span> joystick esquerdo move; gatilho interage</li>
+              <li><span>VR</span> stick esquerdo move; grip anda; 2 grips correm; gatilho interage; X lanterna; A celular; B/Y pausa</li>
             </ul>
             <button id="btn-close-instructions" class="btn btn--secondary">VOLTAR</button>
           </div>
@@ -184,14 +195,28 @@
       </div>
 
       <!-- Tela final -->
-      <div id="end-screen" class="screen hidden">
-        <h2 class="end-title">MISSÃO CONCLUÍDA</h2>
-        <div class="end-stats">
-          <p>Jogador: <span id="end-player"></span></p>
-          <p>Pontuação: <span id="end-score"></span></p>
-          <p>Tempo: <span id="end-time"></span></p>
+      <div id="end-screen" class="screen hidden real-world-ending">
+        <div class="real-room" aria-hidden="true">
+          <div class="real-window"><span></span><span></span></div>
+          <div class="real-wall-light"></div>
+          <div class="real-bed">
+            <div class="real-pillow"></div>
+            <div class="real-blanket"></div>
+            <div class="real-person"><span class="real-head"></span><span class="real-arm"></span></div>
+          </div>
+          <div class="real-floor"></div>
         </div>
-        <button id="btn-restart" class="btn">JOGAR NOVAMENTE</button>
+        <div class="real-world-content">
+          <p class="real-kicker">DE VOLTA À REALIDADE</p>
+          <h2 class="end-title">VOCÊ ACORDA</h2>
+          <p class="real-world-copy">A luz atravessa a janela. Você abre os olhos, mas ainda sente o chão impossível sob os pés.</p>
+          <div class="end-stats">
+            <p>Jogador: <span id="end-player"></span></p>
+            <p>Pontuação: <span id="end-score"></span></p>
+            <p>Tempo: <span id="end-time"></span></p>
+          </div>
+          <button id="btn-restart" class="btn">JOGAR NOVAMENTE</button>
+        </div>
       </div>
 
       <!-- Tela de fim de jogo (captura) - chuvisco Slenderman -->

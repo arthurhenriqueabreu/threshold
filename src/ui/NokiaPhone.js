@@ -206,7 +206,7 @@ export class NokiaPhone {
                     this.hudGroup.scale.set(1, 1, 1);
                 }
                 this.camera.add(this.hudGroup);
-                this.hudGroup.visible = true;
+                this._attachHUD();
             } catch (e) {
                 console.warn('[NokiaPhone] falha HUD 3D, fallback HTML', e);
                 this.root?.classList.remove('hidden');
@@ -225,8 +225,8 @@ export class NokiaPhone {
         if (!this.isOpen) return false;
         this.isOpen = false;
         this.root?.classList.add('hidden');
-        if (this.camera && this.hudGroup.parent === this.camera) {
-            this.camera.remove(this.hudGroup);
+        if (this.hudGroup.parent) {
+            this.hudGroup.parent.remove(this.hudGroup);
         }
         this.hudGroup.visible = false;
         this.audio?.sfx?.('ui');
@@ -365,6 +365,7 @@ export class NokiaPhone {
     // sway sutil na mão
     update(delta, time) {
         if (!this.isOpen || !this.hudGroup.visible) return;
+        if (this.xrController) return; // no pulso: segue o controller, sem sway
         const swayX = Math.sin(time * 0.9) * 0.008;
         const swayY = Math.cos(time * 1.1) * 0.006;
         this.hudGroup.position.x = 0.28 + swayX;
@@ -375,6 +376,30 @@ export class NokiaPhone {
     setCamera(camera, scene) {
         this.camera = camera;
         this.scene = scene;
+    }
+
+    // XR: Nokia próximo ao controller esquerdo, nunca grudado no rosto.
+    setXRController(controller) {
+        this.xrController = controller || null;
+        if (this.isOpen && this.hudGroup.visible) this._attachHUD();
+    }
+
+    _attachHUD() {
+        const anchor = this.xrController ?? this.camera;
+        if (!anchor) return;
+        if (this.hudGroup.parent !== anchor) {
+            this.hudGroup.parent?.remove(this.hudGroup);
+            anchor.add(this.hudGroup);
+        }
+        if (this.xrController) {
+            // pose confortável acima do pulso esquerdo
+            this.hudGroup.position.set(0.02, 0.10, -0.10);
+            this.hudGroup.rotation.set(-0.5, 0, 0);
+        } else {
+            this.hudGroup.position.set(0.28, -0.24, -0.46);
+            this.hudGroup.rotation.set(-0.18, 0.18, -0.06);
+        }
+        this.hudGroup.visible = true;
     }
 
     dispose() {
