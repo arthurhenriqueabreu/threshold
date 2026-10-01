@@ -123,7 +123,11 @@ export const CONFIG = {
             postGamma: 0.85,
             dithering: false,
             internalLowRes: false,
-            framebufferScale: 0.75
+            framebufferScale: 0.75,
+            visualPresets: {
+                ps1: { quantizationStrength: 1.0, postGamma: 0.85 },
+                clean: { quantizationStrength: 0.0, postGamma: 1.0 }
+            }
         }
     },
 
@@ -199,6 +203,12 @@ export const CONFIG = {
     xr: {
         gripLocomotion: true,
         armSwing: false,
+        visualFilter: 'ps1',
+        lightingMode: 'ps1',
+        lightingPresets: {
+            ps1: { ambientScale: 1.0, hemisphereScale: 1.0 },
+            bright: { ambientScale: 1.35, hemisphereScale: 1.2 }
+        },
         walkSpeed: 2.2,
         sprintSpeed: 3.4,
         // Quest default: smooth continuous turning. Snap remains available
@@ -280,6 +290,8 @@ export const CONFIG = {
         comfortOverrides: {
             vignette: null,
             turnMode: null,
+            visualFilter: null,
+            lightingMode: null,
             snapTurnAngle: null,
             speedScale: null,
             effectsScale: null,

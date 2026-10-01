@@ -46,8 +46,9 @@ export class VRUI {
         this._raycaster = new THREE.Raycaster();
         this._lastDraw = 0;
         this._focusedId = null;
-        // De onde o painel CONFORTO foi aberto ('main' | 'pause').
+        // De onde os submenus foram abertos ('main' | 'pause').
         this._comfortReturn = 'pause';
+        this._visualReturn = 'pause';
     }
 
     setActionHandler(fn) {
@@ -56,12 +57,15 @@ export class VRUI {
 
     get isMenuOpen() {
         return this.mode === 'main' || this.mode === 'pause' || this.mode === 'comfort'
-            || this.mode === 'gameover' || this.mode === 'end' || this.mode === 'intro';
+            || this.mode === 'visual' || this.mode === 'gameover' || this.mode === 'end' || this.mode === 'intro';
     }
 
     show(mode, data = {}) {
         if (mode === 'comfort') {
             this._comfortReturn = (data.from === 'main') ? 'main' : 'pause';
+        }
+        if (mode === 'visual') {
+            this._visualReturn = (data.from === 'main') ? 'main' : 'pause';
         }
         this.mode = mode;
         this.menuData = data;
@@ -263,15 +267,17 @@ export class VRUI {
             ctx.fillText('NO JOGO: GRIP/STICK ESQ = mover  •  STICK DIR = girar', W / 2, 250);
             this._button(ctx, 'vr-start', '[ INICIAR ]', W / 2, 292);
             this._button(ctx, 'vr-comfort', '[ CONFORTO VR ]', W / 2, 376, 560, 64);
+            this._button(ctx, 'vr-visual', '[ VISUAL PS1 ]', W / 2, 450, 560, 58);
             ctx.fillStyle = 'rgba(216,194,106,0.8)';
             ctx.font = '22px VT323, monospace';
             ctx.fillText(d.playerName ? `JOGADOR: ${d.playerName}` : 'Aponte + TRIGGER p/ selecionar', W / 2, H - 40);
         } else if (this.mode === 'pause') {
             this._frame(ctx, W, H, 'THRESHOLD', 'PAUSADO');
-            this._button(ctx, 'vr-resume', '[ CONTINUAR ]', W / 2, 170);
-            this._button(ctx, 'vr-comfort', '[ CONFORTO VR ]', W / 2, 254, 560, 64);
-            this._button(ctx, 'vr-restart', '[ REINICIAR ]', W / 2, 328, 560, 64);
-            this._button(ctx, 'vr-menu', '[ VOLTAR AO MENU ]', W / 2, 402, 560, 64);
+            this._button(ctx, 'vr-resume', '[ CONTINUAR ]', W / 2, 158);
+            this._button(ctx, 'vr-comfort', '[ CONFORTO VR ]', W / 2, 228, 560, 58);
+            this._button(ctx, 'vr-visual', '[ VISUAL PS1 ]', W / 2, 294, 560, 58);
+            this._button(ctx, 'vr-restart', '[ REINICIAR ]', W / 2, 360, 560, 58);
+            this._button(ctx, 'vr-menu', '[ VOLTAR AO MENU ]', W / 2, 426, 560, 58);
             ctx.fillStyle = 'rgba(216,194,106,0.8)';
             ctx.font = '22px VT323, monospace';
             ctx.textAlign = 'center';
@@ -296,6 +302,21 @@ export class VRUI {
             this._button(ctx, 'vr-effects', `EFEITOS: ${c.effectsScale === 'reduced' ? 'REDUZIDOS' : 'NORMAIS'}`, W / 2, 464, 560, 56);
             this._button(ctx, 'vr-locomotion', `LOCOMOÇÃO: ${(c.locomotionMode ?? 'continuous') === 'blink' ? 'BLINK STEP' : 'CONTÍNUA'}`, W / 2, 528, 560, 56);
             this._button(ctx, 'vr-comfort-back', '[ VOLTAR ]', W / 2, H - 54, 300, 42);
+        } else if (this.mode === 'visual') {
+            const v = d.visual ?? {};
+            this._frame(ctx, W, H, 'VISUAL VR', 'ESTILO APLICADO NA HORA');
+            ctx.fillStyle = '#fff4d6';
+            ctx.font = '26px VT323, monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('PS1 usa paleta/curva retro stereo-safe no Quest', W / 2, 190);
+            this._button(ctx, 'vr-visual-filter',
+                `FILTRO: ${(v.visualFilter ?? 'ps1') === 'ps1' ? 'PS1' : 'LIMPO'}`,
+                W / 2, 238, 580, 68);
+            this._button(ctx, 'vr-visual-lighting',
+                `ILUMINAÇÃO: ${(v.lightingMode ?? 'ps1') === 'ps1' ? 'PS1' : 'CLARA'}`,
+                W / 2, 326, 580, 68);
+            this._button(ctx, 'vr-visual-back', '[ VOLTAR ]', W / 2, 430, 320, 58);
+            this._smallNote(ctx, W, H, 'FILTRO PS1 = mais próximo do visual desktop');
         } else if (this.mode === 'intro') {
             this._frame(ctx, W, H, d.title ?? 'NÍVEL', d.subtitle ?? '');
             ctx.fillStyle = '#fff4d6';

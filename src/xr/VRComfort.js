@@ -34,6 +34,8 @@ export class VRComfortManager {
         this.overrides = {
             vignette: null,
             turnMode: null,
+            visualFilter: null,
+            lightingMode: null,
             snapTurnAngle: null,
             speedScale: null,
             effectsScale: null,
@@ -129,6 +131,8 @@ export class VRComfortManager {
             flickerScale: profile.flickerScale ?? 0.65,
             effectsScale: ov.effectsScale === 'reduced' ? 0.6 : 1,
             turnMode: ov.turnMode ?? CONFIG.xr?.turnMode ?? 'smooth',
+            visualFilter: ov.visualFilter ?? CONFIG.xr?.visualFilter ?? 'ps1',
+            lightingMode: ov.lightingMode ?? CONFIG.xr?.lightingMode ?? 'ps1',
             snapTurnAngle: ov.snapTurnAngle ?? CONFIG.xr?.snapTurnAngle ?? 30,
             locomotionMode: ov.locomotionMode ?? CONFIG.xr?.locomotionMode ?? 'continuous'
         };

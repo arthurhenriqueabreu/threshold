@@ -2,6 +2,17 @@ import * as THREE from 'three';
 import { Interactable } from './Interactable.js';
 import { CONFIG } from '../core/Config.js';
 
+const PICKUP_COLORS = {
+    fuse: 0xffcc44,
+    keycard: 0xffd23a,
+    phone: 0x66ccff,
+    radar: 0x44ffaa,
+    partA: 0xff5a3c,
+    partB: 0x3c8aff,
+    flashlight: 0xffdd66,
+    fragment: 0xd8a0ff
+};
+
 export class PickupItem extends Interactable {
     constructor(mesh, { id, prompt }) {
         super(mesh);
@@ -10,6 +21,8 @@ export class PickupItem extends Interactable {
         this.collected = false;
         this.isPickupItem = true;
         this.baseY = mesh.position.y;
+        this.xrMode = false;
+        mesh.traverse?.((object) => { object.frustumCulled = false; });
         this.setupInteractionProxy();
         this.setupEffects();
     }
@@ -79,6 +92,34 @@ export class PickupItem extends Interactable {
         this.particlePositions = positions;
         this.particleSizes = sizes;
         mesh.add(this.particles);
+
+        const beaconColor = PICKUP_COLORS[this.id] ?? 0x88bbff;
+        const beaconMat = new THREE.MeshBasicMaterial({
+            color: beaconColor,
+            wireframe: true,
+            transparent: true,
+            opacity: 0.42,
+            depthTest: true,
+            depthWrite: false
+        });
+        this.xrBeacon = new THREE.Mesh(new THREE.OctahedronGeometry(0.42, 0), beaconMat);
+        this.xrBeacon.visible = false;
+        this.xrBeacon.renderOrder = 8;
+        mesh.add(this.xrBeacon);
+    }
+
+    setXRMode(active) {
+        this.xrMode = !!active;
+        const root = this.meshes[0];
+        if (root && !this.collected) {
+            root.visible = true;
+            root.traverse?.((object) => { object.frustumCulled = false; });
+        }
+        if (this.xrBeacon) this.xrBeacon.visible = this.xrMode && !this.collected;
+        if (this.particles?.material) {
+            this.particles.material.size = this.xrMode ? 0.09 : 0.07;
+            this.particles.material.opacity = this.xrMode ? 1.0 : 0.85;
+        }
     }
 
     update(delta, time) {
@@ -89,7 +130,14 @@ export class PickupItem extends Interactable {
 
         if (this.glowMesh) {
             this.glowMesh.scale.setScalar(1.0 + Math.sin(time * 2.5) * 0.15);
-            this.glowMesh.material.opacity = 0.1 + Math.sin(time * 3) * 0.05;
+            const glowBase = this.xrMode ? 0.22 : 0.10;
+            const glowAmp = this.xrMode ? 0.08 : 0.05;
+            this.glowMesh.material.opacity = glowBase + Math.sin(time * 3) * glowAmp;
+        }
+        if (this.xrBeacon?.visible) {
+            this.xrBeacon.rotation.x += delta * 0.35;
+            this.xrBeacon.rotation.z += delta * 0.25;
+            this.xrBeacon.scale.setScalar(1.0 + Math.sin(time * 2.2) * 0.08);
         }
 
         if (this.particles) {

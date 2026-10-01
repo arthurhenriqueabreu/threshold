@@ -114,12 +114,14 @@ export class Lighting {
         this.lightCellMap = new Map();
         this.ambient = null;
         this.hemisphere = null;
+        this.baseAmbientIntensity = CONFIG.atmosphere.ambientIntensity;
+        this.baseHemisphereIntensity = 0.85;
     }
 
     setup(lightData, flickerIndices = [], flickerIntensity = 1.0) {
         // Difícil não escurece mais — só fog, luz igual ao normal para ficar jogável
-        const ambientIntensity = CONFIG.atmosphere.ambientIntensity;
-        const hemiIntensity = 0.85;
+        const ambientIntensity = this.baseAmbientIntensity;
+        const hemiIntensity = this.baseHemisphereIntensity;
         const ambient = new THREE.AmbientLight(0xfff2cc, ambientIntensity);
         const hemisphere = new THREE.HemisphereLight(0xfff4d6, 0x5a5238, hemiIntensity);
         this.scene.add(ambient, hemisphere);
@@ -169,6 +171,15 @@ export class Lighting {
         for (const flickering of this.flickeringLights) {
             flickering.setXRScale(flickerScale ?? 1, xrActive);
         }
+    }
+
+    setXRVisualMode(mode, xrActive) {
+        const presetName = mode === 'bright' ? 'bright' : 'ps1';
+        const preset = CONFIG.xr?.lightingPresets?.[presetName] ?? { ambientScale: 1, hemisphereScale: 1 };
+        const ambientScale = xrActive ? (preset.ambientScale ?? 1) : 1;
+        const hemisphereScale = xrActive ? (preset.hemisphereScale ?? 1) : 1;
+        if (this.ambient) this.ambient.intensity = this.baseAmbientIntensity * ambientScale;
+        if (this.hemisphere) this.hemisphere.intensity = this.baseHemisphereIntensity * hemisphereScale;
     }
 
     dispose() {

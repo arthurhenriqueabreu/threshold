@@ -18,7 +18,8 @@ export class RetroRenderer {
         this.baseEnabled = retroConfig.enabled;
         this.enabled = this.baseEnabled;
         this.style = new RetroStyle(retroConfig);
-        this.isVRMode = false; // preparação futura para preset vr-safe
+        this.isVRMode = false;
+        this.xrVisualMode = CONFIG.xr?.visualFilter ?? 'ps1';
 
         // RenderTarget de baixa resolução.
         this.renderTarget = new THREE.WebGLRenderTarget(1, 1, {
@@ -129,6 +130,15 @@ export class RetroRenderer {
         }
     }
 
+    setXRVisualMode(mode) {
+        this.xrVisualMode = mode === 'clean' ? 'clean' : 'ps1';
+    }
+
+    _xrVisualPreset() {
+        const presets = CONFIG.retro.vrSafe?.visualPresets ?? {};
+        return presets[this.xrVisualMode] ?? presets.ps1 ?? CONFIG.retro.vrSafe;
+    }
+
     // Passa a redimensionar e também aplica pixelated no canvas CSS.
     applyPixelatedCSS() {
         const canvas = this.renderer.domElement;
@@ -188,6 +198,7 @@ export class RetroRenderer {
         this._syncSharedUniforms();
         const res = this.style.resolution;
         const jitter = this.style.snapJitter(time);
+        const xrVisual = this._xrVisualPreset();
         for (const entry of this.sharedUniforms) {
             if (!entry || !entry.uniform) continue;
             const u = entry.uniform;
@@ -210,12 +221,12 @@ export class RetroRenderer {
                     break;
                 case 'quantizeStrength':
                     u.value = this.isVRMode && CONFIG.retro.vrSafe.colorQuantization
-                        ? CONFIG.retro.vrSafe.quantizationStrength
+                        ? (xrVisual.quantizationStrength ?? CONFIG.retro.vrSafe.quantizationStrength)
                         : 0;
                     break;
                 case 'colorGradeGamma':
                     u.value = this.isVRMode
-                        ? (CONFIG.retro.vrSafe.postGamma ?? CONFIG.retro.postGamma)
+                        ? (xrVisual.postGamma ?? CONFIG.retro.vrSafe.postGamma ?? CONFIG.retro.postGamma)
                         : 1;
                     break;
                 case 'quantizeLevels':

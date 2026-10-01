@@ -572,7 +572,11 @@ export class Game {
         // ---- sessionend ----
         this._xrEntryPending = false;
         this.input.clearActions();
-        try { this.level?.lighting?.setXRComfort?.(1, false); } catch { }
+        try {
+            this.level?.lighting?.setXRComfort?.(1, false);
+            this.level?.lighting?.setXRVisualMode?.('ps1', false);
+            this._setXRPickupVisibility(false);
+        } catch { }
         if (this.nokiaPhone?.isOpen) this.nokiaPhone.close();
         this.nokiaPhone?.setXRController(null);
         if (this.flashlight) this.flashlight.setXRController(null);
@@ -609,7 +613,12 @@ export class Game {
         } catch { }
         try { this.input?.setLocomotionMode?.(eff.locomotionMode); } catch { }
         try { this.input?.setTurnMode?.(eff.turnMode); } catch { }
-        try { this.level?.lighting?.setXRComfort?.(eff.flickerScale, this.renderer?.xr?.isPresenting); } catch { }
+        try { this.retroRenderer?.setXRVisualMode?.(eff.visualFilter); } catch { }
+        try {
+            this.level?.lighting?.setXRComfort?.(eff.flickerScale, this.renderer?.xr?.isPresenting);
+            this.level?.lighting?.setXRVisualMode?.(eff.lightingMode, this.renderer?.xr?.isPresenting);
+        } catch { }
+        try { this._setXRPickupVisibility(this.renderer?.xr?.isPresenting); } catch { }
         try {
             this.player?.setComfortHooks?.({
                 comfortProfile: () => this.comfort.getEffectiveConfig(),
@@ -621,10 +630,24 @@ export class Game {
                 }
             });
         } catch { }
-        // Re-desenha o painel conforto se estiver aberto.
+        // Re-desenha submenus abertos para refletir alterações em tempo real.
         try {
             if (this.vrUI?.mode === 'comfort') this._showVRComfort();
+            if (this.vrUI?.mode === 'visual') this._showVRVisual();
         } catch { }
+    }
+
+    _setXRPickupVisibility(active) {
+        const seen = new Set();
+        const apply = (item) => {
+            if (!item || seen.has(item)) return;
+            seen.add(item);
+            item.setXRMode?.(!!active);
+            if (!item.collected && item.meshes?.[0]) item.meshes[0].visible = true;
+        };
+        for (const entry of this.level?.pickups ?? []) apply(entry?.item);
+        apply(this.level?.fusePickup);
+        apply(this.level?.keycardPickup);
     }
 
     _comfortUIData() {
@@ -634,6 +657,8 @@ export class Game {
             profileName: eff.profileName,
             vignette: eff.vignette,
             turnMode: eff.turnMode,
+            visualFilter: eff.visualFilter,
+            lightingMode: eff.lightingMode,
             snapTurnAngle: eff.snapTurnAngle,
             speedScale: ov.speedScale ?? 1,
             effectsScale: ov.effectsScale ?? 'normal',
@@ -646,11 +671,50 @@ export class Game {
         this.vrUI?.show('comfort', { from, comfort: this._comfortUIData() });
     }
 
+    _visualUIData() {
+        const eff = this.comfort.getEffectiveConfig();
+        return {
+            visualFilter: eff.visualFilter,
+            lightingMode: eff.lightingMode
+        };
+    }
+
+    _showVRVisual() {
+        const from = (this.gameState.state === 'MENU') ? 'main' : 'pause';
+        this.vrUI?.show('visual', { from, visual: this._visualUIData() });
+    }
+
     // --- VR menus / pause ------------------------------------------------
     onVRMenuAction(id) {
         try { this.audio.sfx('ui'); } catch { }
         if (id === 'vr-comfort') {
             this._showVRComfort();
+            return;
+        }
+        if (id === 'vr-visual') {
+            this._showVRVisual();
+            return;
+        }
+        if (id === 'vr-visual-filter') {
+            const eff = this.comfort.getEffectiveConfig();
+            this.comfort.setOverride('visualFilter', eff.visualFilter === 'ps1' ? 'clean' : 'ps1');
+            return;
+        }
+        if (id === 'vr-visual-lighting') {
+            const eff = this.comfort.getEffectiveConfig();
+            this.comfort.setOverride('lightingMode', eff.lightingMode === 'ps1' ? 'bright' : 'ps1');
+            return;
+        }
+        if (id === 'vr-visual-back') {
+            const from = this.vrUI?._visualReturn ?? 'pause';
+            if (from === 'main' || this.gameState.state === 'MENU') {
+                this.vrUI?.show('main', {
+                    playerName: this.gameState.playerName || this.resolveVRPlayerName(),
+                    levelName: CONFIG.levels.names[this.gameState.currentLevelIndex] ?? 'CHÃO 0'
+                });
+            } else {
+                this.vrUI?.show('pause', { sessionTimeSec: this.xrSessionPlayTime });
+            }
             return;
         }
         if (id === 'vr-comfort-back') {
@@ -990,11 +1054,8 @@ export class Game {
         }
         this._attachXRDevices();
         this.applyDarkness();
-        // Flicker XR usa o scale do profile quando apresentando.
-        try {
-            const eff = this.comfort.getEffectiveConfig();
-            this.level?.lighting?.setXRComfort?.(eff.flickerScale, this.renderer.xr.isPresenting);
-        } catch { }
+        // Reapply comfort + visual settings to the freshly loaded level.
+        try { this.applyComfort(); } catch { }
         this.updateItemUiFromState();
         if (this.gameState.state === 'PLAYING') this.proximityStatic.start();
     }
